@@ -20,7 +20,7 @@ const memorySchema = new mongoose.Schema({
   userId: String,
   context: Array,
   summary: String,
-  preferences: String, // NEW FIELD
+  preferences: String,
 });
 const channelMemorySchema = new mongoose.Schema({
   channelId: String,
@@ -100,7 +100,7 @@ async function generateSummary(context) {
   return response.choices[0].message.content;
 }
 
-// 🧠 Detect if input sets preferences
+// 🧠 Detect if user is setting preferences
 async function detectUserPreferenceRequest(context, input) {
   try {
     const messages = [
@@ -133,35 +133,38 @@ If there is no persistent preference in the message, reply exactly with "none".
   }
 }
 
-// ❓ Fact/contradiction check
+// ❓ Stricter contradiction/misinformation check
 async function detectCorrectionType(userContext, input) {
   try {
-    const prompt = `
-You're an assistant analyzing a user's new message for accuracy and logical consistency.
+    const messages = [
+      {
+        role: "system",
+        content: `
+You're a logical assistant. Your job is to determine whether a user's new message **clearly** contradicts something they said before or contains **clear factual misinformation**.
 
-ONLY compare the message against the user's own previous statements (ignore other users).
+Only analyze the user's messages. Ignore all others.
 
-Reply ONLY with one of these options:
+Respond ONLY with one of the following:
 - "contradiction"
 - "misinformation"
 - "both"
 - "none"
 
-User history:
-${userContext.map((m) => m.content).join("\n")}
-
-New message:
-${input}
-    `.trim();
+ONLY choose one of the first three if you are **very confident**. Otherwise, say "none".
+        `.trim(),
+      },
+      ...userContext.slice(-10).map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: input },
+    ];
 
     const result = await openai.chat.completions.create({
       model: AIModel,
-      messages: [{ role: "system", content: prompt }],
+      messages,
       max_tokens: 10,
       temperature: 0,
     });
 
-    const answer = result.choices[0].message.content.toLowerCase();
+    const answer = result.choices[0].message.content.trim().toLowerCase();
     if (answer.includes("both")) return "both";
     if (answer.includes("contradiction")) return "contradiction";
     if (answer.includes("misinformation")) return "misinformation";
@@ -207,13 +210,15 @@ client.on("messageCreate", async (message) => {
     content: input,
   });
 
+  // Check for contradiction/misinformation
   const correctionType = await detectCorrectionType(userContext, input);
-  const shouldRespond = mentioned || isReply || correctionType !== "none";
 
-  // NEW: Preference detection
+  // Check for preference-setting
   const newPref = await detectUserPreferenceRequest(userContext, input);
   const updatedPreferences = newPref ? newPref : preferences;
 
+  // Decide whether to respond
+  const shouldRespond = mentioned || isReply || correctionType !== "none";
   if (!shouldRespond && !newPref) return;
 
   await message.channel.sendTyping();
@@ -225,7 +230,7 @@ client.on("messageCreate", async (message) => {
     day: "numeric",
   });
 
-  // Choose header if automatic correction
+  // Header for auto-corrections
   let header = "";
   if (!mentioned && !isReply) {
     if (correctionType === "contradiction") header = "📌 *Contradiction noted:*\n\n";
