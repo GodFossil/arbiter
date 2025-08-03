@@ -70,14 +70,13 @@ const AIModel = "gpt-4o";
 
 // 📘 System instruction
 const AIPrompt = (date, summary, preferences) => `
-You are Arbiter, the wise assistant of our Discord debate server: The Debate Server. 
+You are Arbiter, the wise assistant of our Discord debate server: The Debate Server.
 You provide logical insights, calm judgment, and philosophical clarity.
-You are direct, succinct, humble, and stoic.
 
-You must also fact-check any claims and respectfully correct misinformation or logical contradictions.
-If something sounds false or contradicts an earlier statement by the same user, point it out gently but clearly.
+You are direct, succinct, humble, and stoic. Never ramble.
 
-Always prioritize clarity and truth. Brevity is wisdom.
+You must fact-check all claims and gently correct misinformation or contradictions when found.
+Keep all replies concise. Avoid long paragraphs. Prioritize clarity and truth. Brevity is wisdom.
 
 Today's date is ${date}.
 Here is what you know about this user: ${summary || "You do not yet know much about this user."}
@@ -100,7 +99,7 @@ async function generateSummary(context) {
   return response.choices[0].message.content;
 }
 
-// 🧠 Detect if input sets preferences
+// 🧠 Detect preference update
 async function detectUserPreferenceRequest(context, input) {
   try {
     const messages = [
@@ -112,7 +111,7 @@ You're an assistant that identifies if a user is expressing long-term instructio
 Only respond with the user's request in natural language if it is a persistent preference (e.g. "talk to me more formally", "call me captain", "be sarcastic", etc).
 
 If there is no persistent preference in the message, reply exactly with "none".
-`.trim(),
+      `.trim(),
       },
       ...context.slice(-10),
       { role: "user", content: input },
@@ -207,21 +206,12 @@ client.on("messageCreate", async (message) => {
   });
 
   const correctionType = await detectCorrectionType(userContext, input);
+  const shouldRespond = mentioned || isReply || correctionType !== "none";
+
   const newPref = await detectUserPreferenceRequest(userContext, input);
   const updatedPreferences = newPref ? newPref : preferences;
 
-  const isCorrection =
-    correctionType === "contradiction" ||
-    correctionType === "misinformation" ||
-    correctionType === "both";
-  const shouldRespond = mentioned || isReply || isCorrection;
-
-  if (!shouldRespond) {
-    if (newPref) {
-      await saveMemory(userId, userContext, summary, updatedPreferences);
-    }
-    return;
-  }
+  if (!shouldRespond && !newPref) return;
 
   await message.channel.sendTyping();
 
@@ -247,6 +237,8 @@ client.on("messageCreate", async (message) => {
         ...channelContext.slice(-10),
         ...userContext.slice(-10),
       ],
+      max_tokens: 250,
+      temperature: 0.4,
     });
 
     const reply = response.choices[0].message.content;
@@ -254,7 +246,6 @@ client.on("messageCreate", async (message) => {
 
     const updatedContext = [...userContext, { role: "assistant", content: reply }];
     let updatedSummary = summary;
-
     if (updatedContext.length % 10 === 0) {
       updatedSummary = await generateSummary(updatedContext.slice(-20));
     }
