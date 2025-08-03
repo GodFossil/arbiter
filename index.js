@@ -20,6 +20,7 @@ const memorySchema = new mongoose.Schema({
   userId: String,
   context: Array,
   summary: String,
+  preferences: String, // NEW FIELD
 });
 const channelMemorySchema = new mongoose.Schema({
   channelId: String,
@@ -33,19 +34,18 @@ const ChannelMemory = mongoose.model("ChannelMemory", channelMemorySchema);
 async function loadMemory(userId) {
   let doc = await Memory.findOne({ userId });
   if (!doc) {
-    doc = new Memory({ userId, context: [], summary: "" });
+    doc = new Memory({ userId, context: [], summary: "", preferences: "" });
     await doc.save();
   }
   return doc;
 }
 
-async function saveMemory(userId, context, summary) {
+async function saveMemory(userId, context, summary, preferences = null) {
   const trimmed = context.slice(-20);
-  await Memory.findOneAndUpdate(
-    { userId },
-    { context: trimmed, ...(summary && { summary }) },
-    { upsert: true }
-  );
+  const update = { context: trimmed };
+  if (summary) update.summary = summary;
+  if (preferences !== null) update.preferences = preferences;
+  await Memory.findOneAndUpdate({ userId }, update, { upsert: true });
 }
 
 // 🔄 Channel memory
@@ -69,7 +69,7 @@ const openai = new OpenAI({ apiKey: OPENAI_KEY });
 const AIModel = "gpt-4o";
 
 // 📘 System instruction
-const AIPrompt = (date, summary) => `
+const AIPrompt = (date, summary, preferences) => `
 You are Arbiter, the wise assistant of our Discord debate server: The Debate Server. 
 You provide logical insights, calm judgment, and philosophical clarity.
 You are direct, succinct, humble, and stoic.
@@ -81,6 +81,7 @@ Always prioritize clarity and truth. Brevity is wisdom.
 
 Today's date is ${date}.
 Here is what you know about this user: ${summary || "You do not yet know much about this user."}
+User preferences: ${preferences || "None."}
 `;
 
 // 🧠 User summary
@@ -97,6 +98,39 @@ async function generateSummary(context) {
     ],
   });
   return response.choices[0].message.content;
+}
+
+// 🧠 Detect if input sets preferences
+async function detectUserPreferenceRequest(context, input) {
+  try {
+    const messages = [
+      {
+        role: "system",
+        content: `
+You're an assistant that identifies if a user is expressing long-term instructions for how they want to be treated or how you should behave.
+
+Only respond with the user's request in natural language if it is a persistent preference (e.g. "talk to me more formally", "call me captain", "be sarcastic", etc).
+
+If there is no persistent preference in the message, reply exactly with "none".
+`.trim(),
+      },
+      ...context.slice(-10),
+      { role: "user", content: input },
+    ];
+
+    const response = await openai.chat.completions.create({
+      model: AIModel,
+      messages,
+      max_tokens: 50,
+      temperature: 0,
+    });
+
+    const output = response.choices[0].message.content.trim();
+    return output.toLowerCase() === "none" ? null : output;
+  } catch (err) {
+    console.error("Preference detection error:", err);
+    return null;
+  }
 }
 
 // ❓ Fact/contradiction check
@@ -165,6 +199,7 @@ client.on("messageCreate", async (message) => {
     content: `${msg.username}: ${msg.content}`,
   }));
   const summary = userDoc.summary;
+  const preferences = userDoc.preferences;
 
   // Save message to channel memory
   await saveChannelMessage(channelId, {
@@ -175,7 +210,11 @@ client.on("messageCreate", async (message) => {
   const correctionType = await detectCorrectionType(userContext, input);
   const shouldRespond = mentioned || isReply || correctionType !== "none";
 
-  if (!shouldRespond) return;
+  // NEW: Preference detection
+  const newPref = await detectUserPreferenceRequest(userContext, input);
+  const updatedPreferences = newPref ? newPref : preferences;
+
+  if (!shouldRespond && !newPref) return;
 
   await message.channel.sendTyping();
 
@@ -198,7 +237,7 @@ client.on("messageCreate", async (message) => {
     const response = await openai.chat.completions.create({
       model: AIModel,
       messages: [
-        { role: "system", content: AIPrompt(currentDate, summary) },
+        { role: "system", content: AIPrompt(currentDate, summary, updatedPreferences) },
         ...channelContext.slice(-10),
         ...userContext.slice(-10),
       ],
@@ -214,7 +253,7 @@ client.on("messageCreate", async (message) => {
       updatedSummary = await generateSummary(updatedContext.slice(-20));
     }
 
-    await saveMemory(userId, updatedContext, updatedSummary);
+    await saveMemory(userId, updatedContext, updatedSummary, updatedPreferences);
   } catch (err) {
     console.error("AI ERROR:", err);
     message.reply("Something went wrong.");
