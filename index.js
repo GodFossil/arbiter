@@ -1,5 +1,5 @@
 const express = require("express");
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, ButtonBuilder, ButtonStyle, ActionRowBuilder, Events } = require("discord.js");
 const { OpenAI } = require("openai");
 const mongoose = require("mongoose");
 
@@ -15,7 +15,6 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 // 🧠 MongoDB Setup
 mongoose.connect(MONGODB_URI);
-
 const memorySchema = new mongoose.Schema({
   userId: String,
   context: Array,
@@ -26,11 +25,9 @@ const channelMemorySchema = new mongoose.Schema({
   channelId: String,
   messages: Array,
 });
-
 const Memory = mongoose.model("Memory", memorySchema);
 const ChannelMemory = mongoose.model("ChannelMemory", channelMemorySchema);
 
-// 🔄 User memory
 async function loadMemory(userId) {
   let doc = await Memory.findOne({ userId });
   if (!doc) {
@@ -39,7 +36,6 @@ async function loadMemory(userId) {
   }
   return doc;
 }
-
 async function saveMemory(userId, context, summary, preferences = null) {
   const trimmed = context.slice(-20);
   const update = { context: trimmed };
@@ -47,8 +43,6 @@ async function saveMemory(userId, context, summary, preferences = null) {
   if (preferences !== null) update.preferences = preferences;
   await Memory.findOneAndUpdate({ userId }, update, { upsert: true });
 }
-
-// 🔄 Channel memory
 async function loadChannelMemory(channelId) {
   let doc = await ChannelMemory.findOne({ channelId });
   if (!doc) {
@@ -57,7 +51,6 @@ async function loadChannelMemory(channelId) {
   }
   return doc;
 }
-
 async function saveChannelMessage(channelId, messageObj) {
   const doc = await loadChannelMemory(channelId);
   const updated = [...doc.messages, messageObj].slice(-20);
@@ -68,110 +61,116 @@ async function saveChannelMessage(channelId, messageObj) {
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 const AIModel = "gpt-4o";
 
-// 📘 System instruction
 const AIPrompt = (date, summary, preferences) => `
 You are Arbiter, the wise assistant of our Discord debate server: The Debate Server.
 You provide logical insights, calm judgment, and philosophical clarity.
+You are direct, succinct, humble, and stoic.
 
-You are direct, succinct, humble, and stoic. Never ramble.
+Avoid long-winded answers. Be brief. Limit replies to key facts and minimal words.
 
-You must fact-check all claims and gently correct misinformation or contradictions when found.
-Keep all replies concise. Avoid long paragraphs. Prioritize clarity and truth. Brevity is wisdom.
+You must also fact-check claims and point out user contradictions only when they are clear and strong. Be selective.
 
 Today's date is ${date}.
-Here is what you know about this user: ${summary || "You do not yet know much about this user."}
+User summary: ${summary || "Unknown."}
 User preferences: ${preferences || "None."}
 `;
 
-// 🧠 User summary
+// 🧠 Summarization
 async function generateSummary(context) {
-  const response = await openai.chat.completions.create({
+  const res = await openai.chat.completions.create({
     model: AIModel,
     messages: [
-      {
-        role: "system",
-        content:
-          "Summarize this user's personality, interests, and beliefs based on their recent conversation history. Be concise and informative.",
-      },
+      { role: "system", content: "Summarize this user's personality, interests, and beliefs based on their recent conversation. Be concise." },
       ...context.map((m) => ({ role: m.role, content: m.content })),
     ],
   });
-  return response.choices[0].message.content;
+  return res.choices[0].message.content;
 }
 
-// 🧠 Detect preference update
 async function detectUserPreferenceRequest(context, input) {
   try {
-    const messages = [
-      {
-        role: "system",
-        content: `
-You're an assistant that identifies if a user is expressing long-term instructions for how they want to be treated or how you should behave.
-
-Only respond with the user's request in natural language if it is a persistent preference (e.g. "talk to me more formally", "call me captain", "be sarcastic", etc).
-
-If there is no persistent preference in the message, reply exactly with "none".
-      `.trim(),
-      },
-      ...context.slice(-10),
-      { role: "user", content: input },
-    ];
-
-    const response = await openai.chat.completions.create({
+    const res = await openai.chat.completions.create({
       model: AIModel,
-      messages,
+      messages: [
+        {
+          role: "system",
+          content: `
+Detect if the user is giving a persistent preference like tone, personality, or behavior instruction.
+
+Only respond with their request (e.g. "be sarcastic", "call me boss").
+
+If no such instruction, reply exactly with "none".
+        `,
+        },
+        ...context.slice(-10),
+        { role: "user", content: input },
+      ],
       max_tokens: 50,
       temperature: 0,
     });
-
-    const output = response.choices[0].message.content.trim();
-    return output.toLowerCase() === "none" ? null : output;
-  } catch (err) {
-    console.error("Preference detection error:", err);
+    const reply = res.choices[0].message.content.trim();
+    return reply.toLowerCase() === "none" ? null : reply;
+  } catch {
     return null;
   }
 }
 
-// ❓ Fact/contradiction check
+// 🧠 Strong contradiction/misinformation check
 async function detectCorrectionType(userContext, input) {
-  try {
-    const prompt = `
-You're an assistant analyzing a user's new message for accuracy and logical consistency.
+  const messages = [
+    {
+      role: "system",
+      content: `
+You're checking if the new message contains strong contradiction or factual misinformation vs the user's own history.
 
-ONLY compare the message against the user's own previous statements (ignore other users).
-
-Reply ONLY with one of these options:
+Respond with:
 - "contradiction"
 - "misinformation"
 - "both"
 - "none"
 
-User history:
-${userContext.map((m) => m.content).join("\n")}
+Only say "contradiction" or "misinformation" if the conflict is **clear and significant**.
+      `.trim(),
+    },
+    ...userContext.slice(-15).map((m) => ({ role: "user", content: m.content })),
+    { role: "user", content: input },
+  ];
 
-New message:
-${input}
-    `.trim();
-
-    const result = await openai.chat.completions.create({
+  try {
+    const res = await openai.chat.completions.create({
       model: AIModel,
-      messages: [{ role: "system", content: prompt }],
+      messages,
       max_tokens: 10,
       temperature: 0,
     });
-
-    const answer = result.choices[0].message.content.toLowerCase();
-    if (answer.includes("both")) return "both";
-    if (answer.includes("contradiction")) return "contradiction";
-    if (answer.includes("misinformation")) return "misinformation";
+    const ans = res.choices[0].message.content.toLowerCase();
+    if (ans.includes("both")) return "both";
+    if (ans.includes("contradiction")) return "contradiction";
+    if (ans.includes("misinformation")) return "misinformation";
     return "none";
-  } catch (err) {
-    console.error("Correction detection error:", err);
+  } catch {
     return "none";
   }
 }
 
-// 🤖 Discord Bot
+// 🔁 Secondary verification
+async function confirmCorrection(correctionType, context, input) {
+  if (correctionType === "none") return false;
+  const clarificationPrompt = `You previously marked this message as ${correctionType}. Please confirm: Is the conflict truly strong and meaningful? Reply with "yes" or "no".`;
+  const res = await openai.chat.completions.create({
+    model: AIModel,
+    messages: [
+      { role: "system", content: clarificationPrompt },
+      ...context.slice(-10).map((m) => ({ role: "user", content: m.content })),
+      { role: "user", content: input },
+    ],
+    max_tokens: 5,
+    temperature: 0,
+  });
+  return res.choices[0].message.content.toLowerCase().includes("yes");
+}
+
+// 🤖 Discord Client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -205,21 +204,21 @@ client.on("messageCreate", async (message) => {
     content: input,
   });
 
-  const correctionType = await detectCorrectionType(userContext, input);
-  const shouldRespond = mentioned || isReply || correctionType !== "none";
-
   const newPref = await detectUserPreferenceRequest(userContext, input);
-  const updatedPreferences = newPref ? newPref : preferences;
+  const updatedPreferences = newPref || preferences;
 
+  let correctionType = await detectCorrectionType(userContext, input);
+  const confirmed = await confirmCorrection(correctionType, userContext, input);
+  if (!confirmed) correctionType = "none";
+
+  const shouldRespond = mentioned || isReply || correctionType !== "none";
   if (!shouldRespond && !newPref) return;
 
   await message.channel.sendTyping();
 
   const displayName = message.member?.displayName || message.author.username;
   const currentDate = new Date().toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
+    year: "numeric", month: "long", day: "numeric",
   });
 
   let header = "";
@@ -237,11 +236,9 @@ client.on("messageCreate", async (message) => {
         ...channelContext.slice(-10),
         ...userContext.slice(-10),
       ],
-      max_tokens: 250,
-      temperature: 0.4,
     });
 
-    const reply = response.choices[0].message.content;
+    const reply = response.choices[0].message.content.trim();
     await message.reply(`${displayName},\n\n${header}${reply}`);
 
     const updatedContext = [...userContext, { role: "assistant", content: reply }];
@@ -260,5 +257,4 @@ client.on("messageCreate", async (message) => {
 client.on("ready", () => {
   console.log(`🟢 Arbiter online as ${client.user.tag}`);
 });
-
 client.login(DISCORD_TOKEN);
