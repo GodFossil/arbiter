@@ -6,7 +6,7 @@ const ClaimExtractor = require("./services/claimExtractor");
 const FactChecker = require("./services/factChecker");
 const ContradictionDetector = require("./services/contradictionDetector");
 const SourceVerifier = require("./services/sourceVerifier");
-const WebSearch = require("./services/webSearch");
+const WebSearch = require("./services/webSearch").default;
 const ContentFetcher = require("./services/contentFetcher");
 const ThreadContextAnalyzer = require("./services/threadContextAnalyzer");
 const InteractiveVerifier = require("./services/interactiveVerifier");
@@ -25,7 +25,7 @@ app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running.
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const OPENAI_KEY = process.env.OPENAI_API_KEY || "default_openai_key";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/arbiter";
-const GOOGLE_SEARCH_API_KEY = process.env.GOOGLE_SEARCH_API_KEY || "default_search_key";
+const EXA_API_KEY = process.env.EXA_API_KEY || "default_exa_key";
 
 // 🧠 MongoDB Setup with error handling
 mongoose.connect(MONGODB_URI)
@@ -153,7 +153,7 @@ const parallelProcessor = new ParallelProcessor(3); // Max 3 concurrent operatio
 const errorHandler = new ErrorHandler(logger);
 const contentFetcher = new ContentFetcher();
 const claimExtractor = new ClaimExtractor(openai);
-const webSearch = new WebSearch(GOOGLE_SEARCH_API_KEY);
+const webSearch = new WebSearch(EXA_API_KEY);
 const sourceVerifier = new SourceVerifier(openai, webSearch, contentFetcher, cacheManager, errorHandler);
 const factChecker = new FactChecker(openai, sourceVerifier, cacheManager, errorHandler);
 const contradictionDetector = new ContradictionDetector(openai);
