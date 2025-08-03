@@ -21,8 +21,15 @@ const memorySchema = new mongoose.Schema({
   context: Array,
   summary: String,
 });
-const Memory = mongoose.model("Memory", memorySchema);
+const channelMemorySchema = new mongoose.Schema({
+  channelId: String,
+  messages: Array,
+});
 
+const Memory = mongoose.model("Memory", memorySchema);
+const ChannelMemory = mongoose.model("ChannelMemory", channelMemorySchema);
+
+// 🔄 User memory functions
 async function loadMemory(userId) {
   let doc = await Memory.findOne({ userId });
   if (!doc) {
@@ -41,6 +48,22 @@ async function saveMemory(userId, context, summary) {
   );
 }
 
+// 🔄 Channel memory functions
+async function loadChannelMemory(channelId) {
+  let doc = await ChannelMemory.findOne({ channelId });
+  if (!doc) {
+    doc = new ChannelMemory({ channelId, messages: [] });
+    await doc.save();
+  }
+  return doc;
+}
+
+async function saveChannelMessage(channelId, messageObj) {
+  const doc = await loadChannelMemory(channelId);
+  const updated = [...doc.messages, messageObj].slice(-20);
+  await ChannelMemory.findOneAndUpdate({ channelId }, { messages: updated });
+}
+
 // 🤖 OpenAI Setup
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 const AIModel = "gpt-4o";
@@ -52,7 +75,7 @@ You provide logical insights, calm judgment, and philosophical clarity.
 You are direct, succinct, humble, and stoic.
 
 You must also fact-check any claims and respectfully correct misinformation or logical contradictions.
-If something sounds false or contradicts an earlier statement, point it out gently but clearly.
+If something sounds false or contradicts an earlier statement by the same user, point it out gently but clearly.
 
 Always prioritize clarity and truth. Brevity is wisdom.
 
@@ -76,19 +99,20 @@ async function generateSummary(context) {
   return response.choices[0].message.content;
 }
 
-// ❓ Detect if message needs fact check or contradiction response — ONLY based on this user's prior statements
-async function needsFactCheck(context, input) {
+// ❓ Detect if user contradicted themselves
+async function needsFactCheck(userContext, input) {
   try {
     const prompt = `
-You are an assistant checking a user's latest message for factual errors or contradictions against their own recent conversation history. 
-Ignore messages from other users or external conversations.
+You're an assistant checking whether a user has contradicted themselves or introduced factual misinformation compared to their recent messages.
 
-Answer ONLY with "yes" if the latest message contains misinformation or contradicts something the user said before. Otherwise answer "no".
+Check ONLY against this specific user's previous statements. Ignore what others have said.
 
-User conversation history:
-${context.map(m => m.content).join("\n")}
+Respond with "yes" if the new message contains misinformation or contradicts something they said before. Otherwise, respond with "no".
 
-Latest message:
+Previous messages:
+${userContext.map((m) => m.content).join("\n")}
+
+New message:
 ${input}
     `;
 
@@ -123,14 +147,28 @@ client.on("messageCreate", async (message) => {
   const mentioned = message.mentions.has(client.user);
   const isReply = message.reference;
   const input = message.content.trim();
-  const doc = await loadMemory(message.author.id);
-  const context = [...doc.context, { role: "user", content: input }];
-  const summary = doc.summary;
+  const userId = message.author.id;
+  const channelId = message.channel.id;
+
+  const userDoc = await loadMemory(userId);
+  const channelDoc = await loadChannelMemory(channelId);
+  const userContext = [...userDoc.context, { role: "user", content: input }];
+  const channelContext = channelDoc.messages.map((msg) => ({
+    role: "user",
+    content: `${msg.username}: ${msg.content}`,
+  }));
+  const summary = userDoc.summary;
+
+  // Save message to shared channel memory
+  await saveChannelMessage(channelId, {
+    username: message.author.username,
+    content: input,
+  });
 
   const shouldRespond =
     mentioned ||
     isReply ||
-    (await needsFactCheck(context, input));
+    (await needsFactCheck(userContext, input));
 
   if (!shouldRespond) return;
 
@@ -144,25 +182,28 @@ client.on("messageCreate", async (message) => {
   });
 
   try {
+    const combinedContext = [
+      { role: "system", content: AIPrompt(currentDate, summary) },
+      ...channelContext.slice(-10),
+      ...userContext.slice(-10),
+    ];
+
     const response = await openai.chat.completions.create({
       model: AIModel,
-      messages: [
-        { role: "system", content: AIPrompt(currentDate, summary) },
-        ...context.slice(-20),
-      ],
+      messages: combinedContext,
     });
 
     const reply = response.choices[0].message.content;
     await message.reply(`${displayName}, ${reply}`);
 
-    const updatedContext = [...context, { role: "assistant", content: reply }];
+    const updatedUserContext = [...userContext, { role: "assistant", content: reply }];
     let updatedSummary = summary;
 
-    if (updatedContext.length % 10 === 0) {
-      updatedSummary = await generateSummary(updatedContext.slice(-20));
+    if (updatedUserContext.length % 10 === 0) {
+      updatedSummary = await generateSummary(updatedUserContext.slice(-20));
     }
 
-    await saveMemory(message.author.id, updatedContext, updatedSummary);
+    await saveMemory(userId, updatedUserContext, updatedSummary);
   } catch (err) {
     console.error("AI ERROR:", err);
     message.reply("Something went wrong.");
