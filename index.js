@@ -1,45 +1,58 @@
 const express = require("express");
 const { Client, GatewayIntentBits } = require("discord.js");
 const { OpenAI } = require("openai");
-const fs = require("fs");
-const path = require("path");
+const mongoose = require("mongoose");
 
-// 🌐 Basic web server to keep Render happy
+// 🌐 Web server (keeps Render alive)
 const app = express();
-app.get("/", (req, res) => res.send("Arbiter is alive."));
-app.listen(process.env.PORT || 3000, () =>
-  console.log("🌐 Web server running.")
-);
+app.get("/", (_, res) => res.send("Arbiter is online."));
+app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running."));
 
-// 🔐 Read secrets from environment
-const DISCORD_TOKEN = process.env.token;
-const OPENAI_KEY = process.env.Key;
+// 🔐 Environment
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const OPENAI_KEY = process.env.OPENAI_API_KEY;
+const MONGODB_URI = process.env.MONGODB_URI;
 
-// 🧠 Adaptive memory file path
-const isRender = process.env.RENDER === "true";
-const memoryPath = isRender ? "/data/memory.json" : path.join(__dirname, "memory.json");
+// 🧠 MongoDB Setup
+mongoose.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
 
-let memory = {};
-try {
-  if (fs.existsSync(memoryPath)) {
-    memory = JSON.parse(fs.readFileSync(memoryPath, "utf8"));
-  } else {
-    fs.writeFileSync(memoryPath, JSON.stringify(memory));
+const memorySchema = new mongoose.Schema({
+  userId: String,
+  context: Array,
+});
+const Memory = mongoose.model("Memory", memorySchema);
+
+async function loadMemory(userId) {
+  let doc = await Memory.findOne({ userId });
+  if (!doc) {
+    doc = new Memory({ userId, context: [] });
+    await doc.save();
   }
-} catch (err) {
-  console.error("Failed to load memory:", err);
+  return doc.context;
 }
 
-function saveMemory() {
-  fs.writeFileSync(memoryPath, JSON.stringify(memory, null, 2));
+async function saveMemory(userId, context) {
+  const trimmed = context.slice(-20); // ⏳ Limit memory to last 20 messages
+  await Memory.findOneAndUpdate({ userId }, { context: trimmed }, { upsert: true });
 }
 
-// 🤖 OpenAI setup
+// 🤖 OpenAI Setup
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 const AIModel = "gpt-4-0613";
-const AIPrompt = `You are the helpful assistant of our Discord debate server. The server is called The Debate Server and it is a community full of brilliant interlocutors. You are to assist us by providing logical analyses, insights, and good company. Your personality is calm, direct, bold, stoic, and wise. You are a master of mindfulness and all things philosophy. You are humble. You will answer prompts succinctly, directly, and in as few words as necessary. You will know that brevity is the soul of wit and wisdom. Your name is Arbiter, and if you like, you may refer to yourself as The Arbiter.`;
 
-// 🤖 Discord client setup
+// 🧠 Core system instruction (with fact-checking)
+const AIPrompt = `
+You are Arbiter, the wise assistant of our Discord debate server: The Debate Server. 
+You provide logical insights, calm judgment, and philosophical clarity.
+You are direct, succinct, humble, and stoic.
+
+You must also fact-check any claims and respectfully correct misinformation or logical contradictions.
+If something sounds false or contradicts an earlier statement, point it out gently but clearly.
+
+Always prioritize clarity and truth. Brevity is wisdom.
+`;
+
+// 🤖 Discord Bot
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -49,7 +62,6 @@ const client = new Client({
   ],
 });
 
-// 🔁 Message handling
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
@@ -61,8 +73,7 @@ client.on("messageCreate", async (message) => {
 
   if (!mentioned && !isReply) return;
 
-  const context = memory[message.author.id] || [];
-
+  const context = await loadMemory(message.author.id);
   context.push({ role: "user", content: input });
 
   try {
@@ -70,16 +81,15 @@ client.on("messageCreate", async (message) => {
       model: AIModel,
       messages: [
         { role: "system", content: AIPrompt },
-        ...context.slice(-10), // last 10 messages of context
+        ...context.slice(-20),
       ],
     });
 
     const reply = response.choices[0].message.content;
-    message.reply(`${displayName}, ${reply}`);
-    context.push({ role: "assistant", content: reply });
+    await message.reply(`${displayName}, ${reply}`);
 
-    memory[message.author.id] = context;
-    saveMemory();
+    context.push({ role: "assistant", content: reply });
+    await saveMemory(message.author.id, context);
   } catch (err) {
     console.error("AI ERROR:", err);
     message.reply("Something went wrong.");
