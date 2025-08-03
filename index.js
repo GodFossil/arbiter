@@ -38,7 +38,7 @@ async function saveMemory(userId, context) {
 
 // 🤖 OpenAI Setup
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
-const AIModel = "gpt-4o";
+const AIModel = "gpt-o4-mini-2025-04-16";
 
 // 🧠 Core system instruction (with fact-checking and dynamic date)
 const AIPrompt = () => `
