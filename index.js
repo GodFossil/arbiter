@@ -38,10 +38,10 @@ async function saveMemory(userId, context) {
 
 // 🤖 OpenAI Setup
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
-const AIModel = "gpt-4-0613";
+const AIModel = "gpt-4o";
 
-// 🧠 Core system instruction (with fact-checking)
-const AIPrompt = `
+// 🧠 Core system instruction (with fact-checking and dynamic date)
+const AIPrompt = () => `
 You are Arbiter, the wise assistant of our Discord debate server: The Debate Server. 
 You provide logical insights, calm judgment, and philosophical clarity.
 You are direct, succinct, humble, and stoic.
@@ -50,6 +50,12 @@ You must also fact-check any claims and respectfully correct misinformation or l
 If something sounds false or contradicts an earlier statement, point it out gently but clearly.
 
 Always prioritize clarity and truth. Brevity is wisdom.
+
+The current date is ${new Date().toLocaleDateString("en-US", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+})}.
 `;
 
 // 🤖 Discord Bot
@@ -81,7 +87,7 @@ client.on("messageCreate", async (message) => {
     const response = await openai.chat.completions.create({
       model: AIModel,
       messages: [
-        { role: "system", content: AIPrompt },
+        { role: "system", content: AIPrompt() },
         ...context.slice(-20),
       ],
     });
