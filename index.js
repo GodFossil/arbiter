@@ -76,6 +76,29 @@ async function generateSummary(context) {
   return response.choices[0].message.content;
 }
 
+// ❓ Detect if message needs fact check
+async function needsFactCheck(context, input) {
+  try {
+    const check = await openai.chat.completions.create({
+      model: AIModel,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You're an assistant detecting whether a user's message contains a factual error or contradiction based on recent conversation. Respond only with 'yes' or 'no'.",
+        },
+        ...context.slice(-10),
+        { role: "user", content: input },
+      ],
+      max_tokens: 5,
+    });
+    return check.choices[0].message.content.toLowerCase().includes("yes");
+  } catch (err) {
+    console.error("Fact-check error:", err);
+    return false;
+  }
+}
+
 // 🤖 Discord Bot
 const client = new Client({
   intents: [
@@ -91,16 +114,21 @@ client.on("messageCreate", async (message) => {
 
   const mentioned = message.mentions.has(client.user);
   const isReply = message.reference;
-  if (!(mentioned || isReply)) return;
-
-  const displayName = message.member?.displayName || message.author.username;
   const input = message.content.trim();
-  await message.channel.sendTyping();
-
   const doc = await loadMemory(message.author.id);
   const context = [...doc.context, { role: "user", content: input }];
   const summary = doc.summary;
 
+  const shouldRespond =
+    mentioned ||
+    isReply ||
+    (await needsFactCheck(context, input));
+
+  if (!shouldRespond) return;
+
+  await message.channel.sendTyping();
+
+  const displayName = message.member?.displayName || message.author.username;
   const currentDate = new Date().toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
