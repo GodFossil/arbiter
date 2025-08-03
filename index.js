@@ -29,7 +29,7 @@ const channelMemorySchema = new mongoose.Schema({
 const Memory = mongoose.model("Memory", memorySchema);
 const ChannelMemory = mongoose.model("ChannelMemory", channelMemorySchema);
 
-// 🔄 User memory functions
+// 🔄 User memory
 async function loadMemory(userId) {
   let doc = await Memory.findOne({ userId });
   if (!doc) {
@@ -48,7 +48,7 @@ async function saveMemory(userId, context, summary) {
   );
 }
 
-// 🔄 Channel memory functions
+// 🔄 Channel memory
 async function loadChannelMemory(channelId) {
   let doc = await ChannelMemory.findOne({ channelId });
   if (!doc) {
@@ -68,7 +68,7 @@ async function saveChannelMessage(channelId, messageObj) {
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 const AIModel = "gpt-4o";
 
-// 📘 System Instruction
+// 📘 System instruction
 const AIPrompt = (date, summary) => `
 You are Arbiter, the wise assistant of our Discord debate server: The Debate Server. 
 You provide logical insights, calm judgment, and philosophical clarity.
@@ -83,7 +83,7 @@ Today's date is ${date}.
 Here is what you know about this user: ${summary || "You do not yet know much about this user."}
 `;
 
-// 🧠 Summarize a user's memory context
+// 🧠 User summary
 async function generateSummary(context) {
   const response = await openai.chat.completions.create({
     model: AIModel,
@@ -99,35 +99,42 @@ async function generateSummary(context) {
   return response.choices[0].message.content;
 }
 
-// ❓ Detect if user contradicted themselves
-async function needsFactCheck(userContext, input) {
+// ❓ Fact/contradiction check
+async function detectCorrectionType(userContext, input) {
   try {
     const prompt = `
-You're an assistant checking whether a user has contradicted themselves or introduced factual misinformation compared to their recent messages.
+You're an assistant analyzing a user's new message for accuracy and logical consistency.
 
-Check ONLY against this specific user's previous statements. Ignore what others have said.
+ONLY compare the message against the user's own previous statements (ignore other users).
 
-Respond with "yes" if the new message contains misinformation or contradicts something they said before. Otherwise, respond with "no".
+Reply ONLY with one of these options:
+- "contradiction"
+- "misinformation"
+- "both"
+- "none"
 
-Previous messages:
+User history:
 ${userContext.map((m) => m.content).join("\n")}
 
 New message:
 ${input}
-    `;
+    `.trim();
 
-    const check = await openai.chat.completions.create({
+    const result = await openai.chat.completions.create({
       model: AIModel,
       messages: [{ role: "system", content: prompt }],
-      max_tokens: 5,
+      max_tokens: 10,
       temperature: 0,
     });
 
-    const answer = check.choices[0].message.content.toLowerCase();
-    return answer.includes("yes");
+    const answer = result.choices[0].message.content.toLowerCase();
+    if (answer.includes("both")) return "both";
+    if (answer.includes("contradiction")) return "contradiction";
+    if (answer.includes("misinformation")) return "misinformation";
+    return "none";
   } catch (err) {
-    console.error("Fact-check error:", err);
-    return false;
+    console.error("Correction detection error:", err);
+    return "none";
   }
 }
 
@@ -159,16 +166,14 @@ client.on("messageCreate", async (message) => {
   }));
   const summary = userDoc.summary;
 
-  // Save message to shared channel memory
+  // Save message to channel memory
   await saveChannelMessage(channelId, {
     username: message.author.username,
     content: input,
   });
 
-  const shouldRespond =
-    mentioned ||
-    isReply ||
-    (await needsFactCheck(userContext, input));
+  const correctionType = await detectCorrectionType(userContext, input);
+  const shouldRespond = mentioned || isReply || correctionType !== "none";
 
   if (!shouldRespond) return;
 
@@ -181,29 +186,35 @@ client.on("messageCreate", async (message) => {
     day: "numeric",
   });
 
-  try {
-    const combinedContext = [
-      { role: "system", content: AIPrompt(currentDate, summary) },
-      ...channelContext.slice(-10),
-      ...userContext.slice(-10),
-    ];
+  // Choose header if automatic correction
+  let header = "";
+  if (!mentioned && !isReply) {
+    if (correctionType === "contradiction") header = "📌 *Contradiction noted:*\n\n";
+    if (correctionType === "misinformation") header = "📚 *Factual correction:*\n\n";
+    if (correctionType === "both") header = "⚠️ *Contradiction & factual error:*\n\n";
+  }
 
+  try {
     const response = await openai.chat.completions.create({
       model: AIModel,
-      messages: combinedContext,
+      messages: [
+        { role: "system", content: AIPrompt(currentDate, summary) },
+        ...channelContext.slice(-10),
+        ...userContext.slice(-10),
+      ],
     });
 
     const reply = response.choices[0].message.content;
-    await message.reply(`${displayName}, ${reply}`);
+    await message.reply(`${displayName},\n\n${header}${reply}`);
 
-    const updatedUserContext = [...userContext, { role: "assistant", content: reply }];
+    const updatedContext = [...userContext, { role: "assistant", content: reply }];
     let updatedSummary = summary;
 
-    if (updatedUserContext.length % 10 === 0) {
-      updatedSummary = await generateSummary(updatedUserContext.slice(-20));
+    if (updatedContext.length % 10 === 0) {
+      updatedSummary = await generateSummary(updatedContext.slice(-20));
     }
 
-    await saveMemory(userId, updatedUserContext, updatedSummary);
+    await saveMemory(userId, updatedContext, updatedSummary);
   } catch (err) {
     console.error("AI ERROR:", err);
     message.reply("Something went wrong.");
