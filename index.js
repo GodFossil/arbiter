@@ -68,6 +68,8 @@ client.on("messageCreate", async (message) => {
   const displayName = message.member?.displayName || message.author.username;
   const input = message.content.trim();
 
+  await message.channel.sendTyping();
+
   const mentioned = message.mentions.has(client.user);
   const isReply = message.reference;
 
