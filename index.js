@@ -1,12 +1,27 @@
-const OpenAI = require("openai");
-const fs = require("fs");
-const config = require("./config.json");
-
-const openai = new OpenAI({
-  apiKey: config.Key,
-});
-
 const { Client, GatewayIntentBits } = require("discord.js");
+const { OpenAI } = require("openai");
+const fs = require("fs");
+const express = require("express");
+
+const app = express();
+app.get("/", (req, res) => res.send("Arbiter is alive."));
+app.listen(process.env.PORT || 3000, () =>
+  console.log("🌐 Web server running.")
+);
+
+// Environment variables
+const DISCORD_TOKEN = process.env.token;
+const OPENAI_KEY = process.env.Key;
+
+// Memory path for persistent disk (Render)
+const memoryPath = "/data/memory.json";
+let memory = {};
+
+if (fs.existsSync(memoryPath)) {
+  memory = JSON.parse(fs.readFileSync(memoryPath, "utf8"));
+} else {
+  fs.writeFileSync(memoryPath, JSON.stringify(memory));
+}
 
 const client = new Client({
   intents: [
@@ -18,141 +33,71 @@ const client = new Client({
   ],
 });
 
-const AIPrompt = `
-You are the helpful assistant of our Discord debate server. The server is called The Debate Server and it is a community full of brilliant interlocutors. You are to assist us by providing logical analyses, insights, and good company. Your personality is calm, direct, bold, stoic, and wise. You are a master of mindfulness and all things philosophy. You are humble. You will answer prompts succinctly, directly, and in as few words as necessary. You will know that brevity is the soul of wit and wisdom. Your name is Arbiter, and if you like, you may refer to yourself as The Arbiter.
-`;
+const openai = new OpenAI({
+  apiKey: OPENAI_KEY,
+});
 
 const AIModel = "gpt-4-0613";
 
-const messageHistories = new Map();
-const MAX_HISTORY = 10;
-
-let memory = {};
-const memoryPath = "./memory.json";
-
-try {
-  memory = JSON.parse(fs.readFileSync(memoryPath, "utf8"));
-} catch (e) {
-  console.error("Failed to load memory, starting fresh.");
-  memory = {};
-}
-
-// 🔍 Fact-check/contradiction evaluator
-async function evaluateForCorrection(messageContent) {
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You're a truth-checking assistant. Your job is to determine whether a message contains factual inaccuracies or internal contradictions. If it does, explain briefly and directly. If it's clear, reply only with 'clear'.",
-        },
-        {
-          role: "user",
-          content: messageContent,
-        },
-      ],
-    });
-
-    return response.choices[0].message.content.trim();
-  } catch (err) {
-    console.error("Fact check error:", err.message);
-    return "clear";
-  }
-}
+const systemInstruction = `
+You are the helpful assistant of our Discord debate server. The server is called The Debate Server and it is a community full of brilliant interlocutors.
+You are to assist us by providing logical analyses, insights, and good company. Your personality is calm, direct, bold, stoic, and wise.
+You are a master of mindfulness and all things philosophy. You are humble. You will answer prompts succinctly, directly, and in as few words as necessary.
+You will know that brevity is the soul of wit and wisdom. Your name is Arbiter, and if you like, you may refer to yourself as The Arbiter.
+`;
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  const isMentioned = message.mentions.has(client.user);
-  const isReplyToArbiter =
-    message.reference &&
-    (await message.channel.messages.fetch(message.reference.messageId))
-      ?.author.id === client.user.id;
+  const displayName = message.member?.displayName || message.author.username;
+  const content = message.content.toLowerCase();
 
-  let allowResponse = isMentioned || isReplyToArbiter;
+  const isMentioned =
+    message.mentions.has(client.user) ||
+    (message.reference &&
+      (await message.channel.messages.fetch(message.reference.messageId)).author.id === client.user.id);
 
-  if (!allowResponse) {
-    const check = await evaluateForCorrection(message.content);
-    if (check !== "clear") {
-      message.reply(`🧠 Correction:\n${check}`);
-      return; // Don't proceed to full AI reply — only correction
-    } else {
-      return; // Stay silent
-    }
-  }
+  const soundsFalse =
+    content.includes("the moon is made of cheese") ||
+    content.match(/nobody can know anything.*i know that/i) ||
+    content.match(/2 \+ 2\s*=\s*5/);
 
-  const prompt = message.content;
-  const channelId = message.channel.id;
+  if (!isMentioned && !soundsFalse) return;
+
   const userId = message.author.id;
+  const prompt = message.content.replace(/<@!?[0-9]+>/g, "").trim();
 
-  if (!messageHistories.has(channelId)) {
-    messageHistories.set(channelId, []);
-  }
-
-  const history = messageHistories.get(channelId);
-  history.push({ role: "user", content: prompt });
-  if (history.length > MAX_HISTORY) {
-    history.shift();
-  }
-
-  const username =
-    message.member?.displayName || message.author.username;
-
-  if (!memory[userId]) {
-    memory[userId] = {
-      name: username,
-      notes: [],
-    };
-  } else {
-    memory[userId].name = username;
-  }
-
-  memory[userId].notes.push(prompt);
-  if (memory[userId].notes.length > 50) {
-    memory[userId].notes.shift();
-  }
-
-  const userMemory = memory[userId].notes.join("\n");
-
-  const systemPrompt = `
-${AIPrompt.trim()}
-
-You are currently speaking with a user named ${username}.
-Here is what Arbiter remembers about this user:
-${userMemory}
-`;
+  const chatHistory = memory[userId] || [];
 
   try {
     const response = await openai.chat.completions.create({
       model: AIModel,
       messages: [
-        {
-          role: "system",
-          content: systemPrompt.trim(),
-        },
-        ...history,
+        { role: "system", content: systemInstruction },
+        ...chatHistory,
+        { role: "user", content: prompt },
       ],
     });
 
     const reply = response.choices[0].message.content;
-    message.reply(reply);
+    await message.reply(`${displayName}, ${reply}`);
 
-    history.push({ role: "assistant", content: reply });
-    if (history.length > MAX_HISTORY) {
-      history.shift();
-    }
+    // Update memory
+    chatHistory.push({ role: "user", content: prompt });
+    chatHistory.push({ role: "assistant", content: reply });
+
+    if (chatHistory.length > 10) chatHistory.shift();
+    memory[userId] = chatHistory;
 
     fs.writeFileSync(memoryPath, JSON.stringify(memory, null, 2));
-  } catch (error) {
-    console.error("OpenAI API error:", error);
-    message.reply("API ERROR: " + error.message);
+  } catch (err) {
+    console.error("OpenAI error:", err);
+    message.reply("Hmm. I encountered an error.");
   }
 });
 
-client.on("ready", () => {
-  console.log(`🟢 Arbiter online as: ${client.user.tag}`);
+client.once("ready", () => {
+  console.log(`Arbiter online as ${client.user.tag}`);
 });
 
-client.login(config.token);
+client.login(DISCORD_TOKEN);
