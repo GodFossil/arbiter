@@ -76,23 +76,31 @@ async function generateSummary(context) {
   return response.choices[0].message.content;
 }
 
-// ❓ Detect if message needs fact check
+// ❓ Detect if message needs fact check or contradiction response — ONLY based on this user's prior statements
 async function needsFactCheck(context, input) {
   try {
+    const prompt = `
+You are an assistant checking a user's latest message for factual errors or contradictions against their own recent conversation history. 
+Ignore messages from other users or external conversations.
+
+Answer ONLY with "yes" if the latest message contains misinformation or contradicts something the user said before. Otherwise answer "no".
+
+User conversation history:
+${context.map(m => m.content).join("\n")}
+
+Latest message:
+${input}
+    `;
+
     const check = await openai.chat.completions.create({
       model: AIModel,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You're an assistant detecting whether a user's message contains a factual error or contradiction based on recent conversation. Respond only with 'yes' or 'no'.",
-        },
-        ...context.slice(-10),
-        { role: "user", content: input },
-      ],
+      messages: [{ role: "system", content: prompt }],
       max_tokens: 5,
+      temperature: 0,
     });
-    return check.choices[0].message.content.toLowerCase().includes("yes");
+
+    const answer = check.choices[0].message.content.toLowerCase();
+    return answer.includes("yes");
   } catch (err) {
     console.error("Fact-check error:", err);
     return false;
