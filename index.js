@@ -3,7 +3,7 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const { OpenAI } = require("openai");
 const mongoose = require("mongoose");
 
-// 🌐 Web server
+// 🌐 Web server (keeps Render alive)
 const app = express();
 app.get("/", (_, res) => res.send("Arbiter is online."));
 app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running."));
@@ -36,6 +36,7 @@ async function loadMemory(userId) {
   }
   return doc;
 }
+
 async function saveMemory(userId, context, summary, preferences = null) {
   const trimmed = context.slice(-20);
   const update = { context: trimmed };
@@ -43,6 +44,7 @@ async function saveMemory(userId, context, summary, preferences = null) {
   if (preferences !== null) update.preferences = preferences;
   await Memory.findOneAndUpdate({ userId }, update, { upsert: true });
 }
+
 async function loadChannelMemory(channelId) {
   let doc = await ChannelMemory.findOne({ channelId });
   if (!doc) {
@@ -51,6 +53,7 @@ async function loadChannelMemory(channelId) {
   }
   return doc;
 }
+
 async function saveChannelMessage(channelId, messageObj) {
   const doc = await loadChannelMemory(channelId);
   const updated = [...doc.messages, messageObj].slice(-20);
@@ -125,10 +128,9 @@ const client = new Client({
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  const mentioned = message.mentions.has(client.user);
-  const isReply = message.reference?.messageId != null;
-  const shouldRespond = mentioned || isReply;
-  if (!shouldRespond) return;
+  const isMentioned = message.mentions.users.has(client.user.id);
+  const isRepliedTo = !!message.reference;
+  if (!isMentioned && !isRepliedTo) return;
 
   const input = message.content.trim();
   const userId = message.author.id;
@@ -188,4 +190,5 @@ client.on("messageCreate", async (message) => {
 client.on("ready", () => {
   console.log(`🟢 Arbiter online as ${client.user.tag}`);
 });
+
 client.login(DISCORD_TOKEN);
