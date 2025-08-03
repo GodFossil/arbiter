@@ -44,12 +44,6 @@ The bot will work without MongoDB but won't save conversation history.
     `);
   });
 
-<<<<<<< HEAD
-=======
-// 🧠 MongoDB Setup
-mongoose.connect(MONGODB_URI);
-
->>>>>>> d833cc7239926c781de1bd67a362f23e3ec051e1
 const memorySchema = new mongoose.Schema({
   userId: String,
   context: Array,
@@ -152,7 +146,6 @@ async function saveFactCheckAlert(channelId, alertObj) {
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 const AIModel = "gpt-4o"; // the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
 
-<<<<<<< HEAD
 // Initialize enhanced services
 const logger = new Logger();
 const cacheManager = new CacheManager();
@@ -168,8 +161,6 @@ const confidenceScorer = new ConfidenceScorer(openai);
 const threadContextAnalyzer = new ThreadContextAnalyzer(openai, cacheManager);
 const interactiveVerifier = new InteractiveVerifier(openai, factChecker, sourceVerifier, cacheManager);
 
-=======
->>>>>>> d833cc7239926c781de1bd67a362f23e3ec051e1
 // 📘 System instruction
 const AIPrompt = (date, summary, preferences) => `
 You are Arbiter, the wise assistant of our Discord debate server: The Debate Server. 
@@ -227,7 +218,6 @@ If there is no persistent preference in the message, reply exactly with "none".
   }
 }
 
-<<<<<<< HEAD
 // 🚨 Enhanced Misinformation Detection Pipeline with Thread Context
 async function analyzeMessageForMisinformation(input, userContext, userId, channelId, message = null) {
   try {
@@ -457,8 +447,6 @@ async function handleInteractiveRequest(message, previousAnalysis = null) {
   return null;
 }
 
-=======
->>>>>>> d833cc7239926c781de1bd67a362f23e3ec051e1
 // 🤖 Discord Bot Setup
 const client = new Client({
   intents: [
@@ -476,12 +464,6 @@ client.on("messageCreate", async (message) => {
   const isRepliedTo = message.reference?.messageId
     ? (await message.channel.messages.fetch(message.reference.messageId)).author.id === client.user.id
     : false;
-<<<<<<< HEAD
-=======
-
-  // ❌ Do not reply unless directly mentioned or replied to
-  if (!isMentioned && !isRepliedTo) return;
->>>>>>> d833cc7239926c781de1bd67a362f23e3ec051e1
 
   const input = message.content.trim();
   const userId = message.author.id;
