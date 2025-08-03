@@ -1,0 +1,14 @@
+{
+  "name": "arbiter",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.21.0",
+    "express": "^5.1.0",
+    "openai": "^5.11.0"
+  }
+}
