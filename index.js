@@ -13,8 +13,8 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// 🧠 MongoDB Setup
-mongoose.connect(MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+// 🧠 MongoDB Setup (no deprecated options)
+mongoose.connect(MONGODB_URI);
 
 const memorySchema = new mongoose.Schema({
   userId: String,
@@ -65,15 +65,14 @@ const client = new Client({
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
+  const mentioned = message.mentions.has(client.user);
+  const isReply = message.reference;
+  if (!(mentioned || isReply)) return;
+
   const displayName = message.member?.displayName || message.author.username;
   const input = message.content.trim();
 
   await message.channel.sendTyping();
-
-  const mentioned = message.mentions.has(client.user);
-  const isReply = message.reference;
-
-  if (!mentioned && !isReply) return;
 
   const context = await loadMemory(message.author.id);
   context.push({ role: "user", content: input });
