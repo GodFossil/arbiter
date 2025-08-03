@@ -15,6 +15,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 // 🧠 MongoDB Setup
 mongoose.connect(MONGODB_URI);
+
 const memorySchema = new mongoose.Schema({
   userId: String,
   context: Array,
@@ -25,6 +26,7 @@ const channelMemorySchema = new mongoose.Schema({
   channelId: String,
   messages: Array,
 });
+
 const Memory = mongoose.model("Memory", memorySchema);
 const ChannelMemory = mongoose.model("ChannelMemory", channelMemorySchema);
 
@@ -64,8 +66,9 @@ async function saveChannelMessage(channelId, messageObj) {
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 const AIModel = "gpt-4o";
 
+// 📘 System instruction
 const AIPrompt = (date, summary, preferences) => `
-You are Arbiter, the wise assistant of our Discord debate server: The Debate Server.
+You are Arbiter, the wise assistant of our Discord debate server: The Debate Server. 
 You provide logical insights, calm judgment, and philosophical clarity.
 You are direct, succinct, humble, and stoic.
 
@@ -77,30 +80,33 @@ User preferences: ${preferences || "None."}
 `;
 
 async function generateSummary(context) {
-  const res = await openai.chat.completions.create({
+  const response = await openai.chat.completions.create({
     model: AIModel,
     messages: [
-      { role: "system", content: "Summarize this user's personality, interests, and beliefs based on their recent conversation. Be concise." },
+      {
+        role: "system",
+        content: "Summarize this user's personality, interests, and beliefs based on their recent conversation history. Be concise and informative.",
+      },
       ...context.map((m) => ({ role: m.role, content: m.content })),
     ],
   });
-  return res.choices[0].message.content;
+  return response.choices[0].message.content;
 }
 
 async function detectUserPreferenceRequest(context, input) {
   try {
-    const res = await openai.chat.completions.create({
+    const response = await openai.chat.completions.create({
       model: AIModel,
       messages: [
         {
           role: "system",
           content: `
-Detect if the user is giving a persistent preference like tone, personality, or behavior instruction.
+You're an assistant that identifies if a user is expressing long-term instructions for how they want to be treated or how you should behave.
 
-Only respond with their request (e.g. "be sarcastic", "call me boss").
+Only respond with the user's request in natural language if it is a persistent preference (e.g. "talk to me more formally", "call me captain", "be sarcastic", etc).
 
-If no such instruction, reply exactly with "none".
-        `,
+If there is no persistent preference in the message, reply exactly with "none".
+          `.trim(),
         },
         ...context.slice(-10),
         { role: "user", content: input },
@@ -108,14 +114,16 @@ If no such instruction, reply exactly with "none".
       max_tokens: 50,
       temperature: 0,
     });
-    const reply = res.choices[0].message.content.trim();
-    return reply.toLowerCase() === "none" ? null : reply;
-  } catch {
+
+    const output = response.choices[0].message.content.trim();
+    return output.toLowerCase() === "none" ? null : output;
+  } catch (err) {
+    console.error("Preference detection error:", err);
     return null;
   }
 }
 
-// 🤖 Discord Client
+// 🤖 Discord Bot Setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -129,7 +137,11 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const isMentioned = message.mentions.users.has(client.user.id);
-  const isRepliedTo = !!message.reference;
+  const isRepliedTo = message.reference?.messageId
+    ? (await message.channel.messages.fetch(message.reference.messageId)).author.id === client.user.id
+    : false;
+
+  // ❌ Do not reply unless directly mentioned or replied to
   if (!isMentioned && !isRepliedTo) return;
 
   const input = message.content.trim();
@@ -158,7 +170,9 @@ client.on("messageCreate", async (message) => {
 
   const displayName = message.member?.displayName || message.author.username;
   const currentDate = new Date().toLocaleDateString("en-US", {
-    year: "numeric", month: "long", day: "numeric",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
   });
 
   try {
@@ -176,6 +190,7 @@ client.on("messageCreate", async (message) => {
 
     const updatedContext = [...userContext, { role: "assistant", content: reply }];
     let updatedSummary = summary;
+
     if (updatedContext.length % 10 === 0) {
       updatedSummary = await generateSummary(updatedContext.slice(-20));
     }
