@@ -1,9 +1,9 @@
 const express = require("express");
-const { Client, GatewayIntentBits, ButtonBuilder, ButtonStyle, ActionRowBuilder, Events } = require("discord.js");
+const { Client, GatewayIntentBits } = require("discord.js");
 const { OpenAI } = require("openai");
 const mongoose = require("mongoose");
 
-// 🌐 Web server (keeps Render alive)
+// 🌐 Web server
 const app = express();
 app.get("/", (_, res) => res.send("Arbiter is online."));
 app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running."));
@@ -68,14 +68,11 @@ You are direct, succinct, humble, and stoic.
 
 Avoid long-winded answers. Be brief. Limit replies to key facts and minimal words.
 
-You must also fact-check claims and point out user contradictions only when they are clear and strong. Be selective.
-
 Today's date is ${date}.
 User summary: ${summary || "Unknown."}
 User preferences: ${preferences || "None."}
 `;
 
-// 🧠 Summarization
 async function generateSummary(context) {
   const res = await openai.chat.completions.create({
     model: AIModel,
@@ -115,61 +112,6 @@ If no such instruction, reply exactly with "none".
   }
 }
 
-// 🧠 Strong contradiction/misinformation check
-async function detectCorrectionType(userContext, input) {
-  const messages = [
-    {
-      role: "system",
-      content: `
-You're checking if the new message contains strong contradiction or factual misinformation vs the user's own history.
-
-Respond with:
-- "contradiction"
-- "misinformation"
-- "both"
-- "none"
-
-Only say "contradiction" or "misinformation" if the conflict is **clear and significant**.
-      `.trim(),
-    },
-    ...userContext.slice(-15).map((m) => ({ role: "user", content: m.content })),
-    { role: "user", content: input },
-  ];
-
-  try {
-    const res = await openai.chat.completions.create({
-      model: AIModel,
-      messages,
-      max_tokens: 10,
-      temperature: 0,
-    });
-    const ans = res.choices[0].message.content.toLowerCase();
-    if (ans.includes("both")) return "both";
-    if (ans.includes("contradiction")) return "contradiction";
-    if (ans.includes("misinformation")) return "misinformation";
-    return "none";
-  } catch {
-    return "none";
-  }
-}
-
-// 🔁 Secondary verification
-async function confirmCorrection(correctionType, context, input) {
-  if (correctionType === "none") return false;
-  const clarificationPrompt = `You previously marked this message as ${correctionType}. Please confirm: Is the conflict truly strong and meaningful? Reply with "yes" or "no".`;
-  const res = await openai.chat.completions.create({
-    model: AIModel,
-    messages: [
-      { role: "system", content: clarificationPrompt },
-      ...context.slice(-10).map((m) => ({ role: "user", content: m.content })),
-      { role: "user", content: input },
-    ],
-    max_tokens: 5,
-    temperature: 0,
-  });
-  return res.choices[0].message.content.toLowerCase().includes("yes");
-}
-
 // 🤖 Discord Client
 const client = new Client({
   intents: [
@@ -184,7 +126,10 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const mentioned = message.mentions.has(client.user);
-  const isReply = message.reference;
+  const isReply = message.reference?.messageId != null;
+  const shouldRespond = mentioned || isReply;
+  if (!shouldRespond) return;
+
   const input = message.content.trim();
   const userId = message.author.id;
   const channelId = message.channel.id;
@@ -207,26 +152,12 @@ client.on("messageCreate", async (message) => {
   const newPref = await detectUserPreferenceRequest(userContext, input);
   const updatedPreferences = newPref || preferences;
 
-  let correctionType = await detectCorrectionType(userContext, input);
-  const confirmed = await confirmCorrection(correctionType, userContext, input);
-  if (!confirmed) correctionType = "none";
-
-  const shouldRespond = mentioned || isReply || correctionType !== "none";
-  if (!shouldRespond && !newPref) return;
-
   await message.channel.sendTyping();
 
   const displayName = message.member?.displayName || message.author.username;
   const currentDate = new Date().toLocaleDateString("en-US", {
     year: "numeric", month: "long", day: "numeric",
   });
-
-  let header = "";
-  if (!mentioned && !isReply) {
-    if (correctionType === "contradiction") header = "📌 *Contradiction noted:*\n\n";
-    if (correctionType === "misinformation") header = "📚 *Factual correction:*\n\n";
-    if (correctionType === "both") header = "⚠️ *Contradiction & factual error:*\n\n";
-  }
 
   try {
     const response = await openai.chat.completions.create({
@@ -239,7 +170,7 @@ client.on("messageCreate", async (message) => {
     });
 
     const reply = response.choices[0].message.content.trim();
-    await message.reply(`${displayName},\n\n${header}${reply}`);
+    await message.reply(`${displayName},\n\n${reply}`);
 
     const updatedContext = [...userContext, { role: "assistant", content: reply }];
     let updatedSummary = summary;
