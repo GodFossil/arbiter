@@ -22,10 +22,10 @@ app.get("/", (_, res) => res.send("Arbiter is online with enhanced misinformatio
 app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running."));
 
 // 🔐 Environment - enhanced validation with PowerShell compatibility
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim() || "";
+const DISCORD_TOKEN = (process.env.DISCORD_TOKEN || "").trim().replace(/^["']|["']$/g, '');
 if (!DISCORD_TOKEN) {
   console.error(`❌ No Discord token provided
-   Set it with: $env:DISCORD_TOKEN="your_token_here"; node index.js`);
+   Set it with: $env:DISCORD_TOKEN='your_token_here'; node index.js`);
   process.exit(1);
 }
 
