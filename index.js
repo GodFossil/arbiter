@@ -21,10 +21,18 @@ const app = express();
 app.get("/", (_, res) => res.send("Arbiter is online with enhanced misinformation detection."));
 app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running."));
 
-// 🔐 Environment - enhanced validation
+// 🔐 Environment - enhanced validation with PowerShell compatibility
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim() || "";
-if (DISCORD_TOKEN.length !== 72 || !DISCORD_TOKEN.startsWith("MT")) {
-  console.error("❌ Invalid Discord token format - it should be 72 chars starting with MT");
+if (
+  DISCORD_TOKEN.length !== 72 || 
+  !DISCORD_TOKEN.startsWith("MT") ||
+  !/^[A-Za-z0-9_\-\.]+$/.test(DISCORD_TOKEN)
+) {
+  console.error(`❌ Invalid Discord token format:
+    - Length: ${DISCORD_TOKEN.length} chars (needs 72)
+    - Starts with: ${DISCORD_TOKEN.substring(0, 2)}
+    - Valid characters: ${/^[A-Za-z0-9_\-\.]+$/.test(DISCORD_TOKEN) ? 'Yes' : 'No'}
+  `);
   process.exit(1);
 }
 const OPENAI_KEY = process.env.OPENAI_API_KEY || "default_openai_key";
