@@ -23,15 +23,23 @@ app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running.
 
 // 🔐 Environment - enhanced validation with PowerShell compatibility
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim() || "";
+if (!DISCORD_TOKEN) {
+  console.error(`❌ No Discord token provided
+   Set it with: $env:DISCORD_TOKEN="your_token_here"; node index.js`);
+  process.exit(1);
+}
+
 if (
   DISCORD_TOKEN.length !== 72 || 
   !DISCORD_TOKEN.startsWith("MT") ||
-  !/^[A-Za-z0-9_\-\.]+$/.test(DISCORD_TOKEN)
+  !/^[\w\-\.]+$/.test(DISCORD_TOKEN)
 ) {
-  console.error(`❌ Invalid Discord token format:
-    - Length: ${DISCORD_TOKEN.length} chars (needs 72)
-    - Starts with: ${DISCORD_TOKEN.substring(0, 2)}
-    - Valid characters: ${/^[A-Za-z0-9_\-\.]+$/.test(DISCORD_TOKEN) ? 'Yes' : 'No'}
+  console.error(`❌ Invalid Discord token format
+   Get a valid token from: https://discord.com/developers/applications
+   Detected Issues:
+   - Length: ${DISCORD_TOKEN.length} (needs 72)
+   - Starts with: ${DISCORD_TOKEN.substring(0, 2) || 'none'}
+   - Valid chars: ${/^[\w\-\.]+$/.test(DISCORD_TOKEN) ? 'Yes' : 'No'}
   `);
   process.exit(1);
 }
