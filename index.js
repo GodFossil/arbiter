@@ -22,7 +22,7 @@ app.get("/", (_, res) => res.send("Arbiter is online with enhanced misinformatio
 app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running."));
 
 // 🔐 Environment
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim();
 const OPENAI_KEY = process.env.OPENAI_API_KEY || "default_openai_key";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/arbiter";
 const EXA_API_KEY = process.env.EXA_API_KEY || "default_exa_key";
