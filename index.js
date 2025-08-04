@@ -27,11 +27,21 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY || "default_openai_key";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/arbiter";
 const EXA_API_KEY = process.env.EXA_API_KEY || "default_exa_key";
 
-// 🧠 MongoDB Setup with error handling
-mongoose.connect(MONGODB_URI)
-  .then(() => console.log('✅ MongoDB connected successfully'))
-  .catch(error => {
-    console.warn('⚠️ MongoDB connection failed, using in-memory fallback:', error.message);
+// 🧠 MongoDB Setup with connection pooling and optimized error handling
+const mongoOptions = {
+  maxPoolSize: 10,
+  minPoolSize: 2,
+  socketTimeoutMS: 30000,
+  heartbeatFrequencyMS: 10000,
+  waitQueueTimeoutMS: 10000
+};
+
+(async () => {
+  try {
+    await mongoose.connect(MONGODB_URI, mongoOptions);
+    console.log('✅ MongoDB connected successfully with pooling');
+  } catch (error) {
+    console.warn(`⚠️ MongoDB connection failed (${error.code}), using in-memory fallback`);
     console.log(`
 📋 MongoDB Setup Required:
 1. Go to MongoDB Atlas (cloud.mongodb.com)
@@ -44,60 +54,102 @@ The bot will work without MongoDB but won't save conversation history.
     `);
   });
 
+// Optimized schemas with indexes and schema options
 const memorySchema = new mongoose.Schema({
-  userId: String,
-  context: Array,
+  userId: { 
+    type: String,
+    required: true,
+    index: true,
+    unique: true 
+  },
+  context: {
+    type: Array,
+    maxlength: 20
+  },
   summary: String,
   preferences: String,
-  factCheckHistory: Array, // Track fact-check history
+  factCheckHistory: {
+    type: Array,
+    maxlength: 50
+  }
+}, { 
+  timestamps: true,
+  bufferCommands: false 
 });
 
 const channelMemorySchema = new mongoose.Schema({
-  channelId: String,
-  messages: Array,
-  factCheckAlerts: Array, // Track misinformation alerts in channel
+  channelId: { 
+    type: String,
+    required: true,
+    index: true,
+    unique: true
+  },
+  messages: {
+    type: Array,
+    maxlength: 20
+  },
+  factCheckAlerts: {
+    type: Array,
+    maxlength: 10
+  }
+}, { 
+  timestamps: true,
+  bufferCommands: false 
 });
 
 const Memory = mongoose.model("Memory", memorySchema);
 const ChannelMemory = mongoose.model("ChannelMemory", channelMemorySchema);
 
+// Optimized memory loading with projection and lean document
+const createMemoryFallback = (userId) => ({ 
+  userId, 
+  context: [], 
+  summary: "", 
+  preferences: "",
+  factCheckHistory: [] 
+});
+
 async function loadMemory(userId) {
   try {
-    let doc = await Memory.findOne({ userId });
-    if (!doc) {
-      doc = new Memory({ 
-        userId, 
-        context: [], 
-        summary: "", 
-        preferences: "",
-        factCheckHistory: []
-      });
-      await doc.save();
-    }
-    return doc;
+    const doc = await Memory.findOne({ userId })
+      .select('-_id -__v -createdAt -updatedAt')
+      .lean()
+      .exec();
+
+    return doc || createMemoryFallback(userId);
   } catch (error) {
-    // Fallback to in-memory storage if MongoDB is unavailable
-    return {
-      userId,
-      context: [],
-      summary: "",
-      preferences: "",
-      factCheckHistory: []
-    };
+    return createMemoryFallback(userId);
   }
 }
 
+// Optimized memory save with atomic updates and bulk operation prevention
 async function saveMemory(userId, context, summary, preferences = null, factCheckHistory = null) {
   try {
-    const trimmed = context.slice(-20);
-    const update = { context: trimmed };
-    if (summary) update.summary = summary;
-    if (preferences !== null) update.preferences = preferences;
-    if (factCheckHistory !== null) update.factCheckHistory = factCheckHistory.slice(-50); // Keep last 50 fact-checks
-    await Memory.findOneAndUpdate({ userId }, update, { upsert: true });
+    const update = { 
+      $set: {
+        context: context.slice(-20),
+        ...(summary && { summary }),
+        ...(preferences !== null && { preferences }),
+        ...(factCheckHistory !== null && { 
+          factCheckHistory: factCheckHistory.slice(-50) 
+        })
+      }
+    };
+
+    await Memory.findOneAndUpdate(
+      { userId }, 
+      update,
+      { 
+        upsert: true,
+        session: null, 
+        lean: true,
+        maxTimeMS: 5000
+      }
+    ).catch(e => console.debug('Optimized save failed:', e.code));
   } catch (error) {
-    // Silently handle MongoDB unavailability - bot continues to function
-    console.debug('MongoDB save failed, continuing with in-memory operation');
+    if (error instanceof mongoose.Error.OperationalError) {
+      console.debug('MongoDB operation failed:', error.message);
+    }
   }
 }
 
@@ -122,13 +174,28 @@ async function loadChannelMemory(channelId) {
   }
 }
 
+// Optimized channel message save with direct update
 async function saveChannelMessage(channelId, messageObj) {
   try {
-    const doc = await loadChannelMemory(channelId);
-    const updated = [...doc.messages, messageObj].slice(-20);
-    await ChannelMemory.findOneAndUpdate({ channelId }, { messages: updated });
+    await ChannelMemory.findOneAndUpdate(
+      { channelId },
+      { 
+        $push: { 
+          messages: { 
+            $each: [messageObj], 
+            $slice: -20,
+            $sort: 1 
+          } 
+        } 
+      },
+      { 
+        upsert: true,
+        projection: { _id: 0 },
+        maxTimeMS: 5000
+      }
+    ).exec().catch(e => console.debug('Channel save failed:', e.code));
   } catch (error) {
-    console.debug('Channel message save failed, continuing...');
+    console.debug('Channel save error:', error.code);
   }
 }
 
