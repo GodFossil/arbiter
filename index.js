@@ -40,8 +40,19 @@ const mongoOptions = {
   try {
     await mongoose.connect(MONGODB_URI, mongoOptions);
     console.log('✅ MongoDB connected successfully with pooling');
+    
+    // Add connection event listeners for better error handling
+    mongoose.connection.on('error', err => {
+      logger.log('error', `MongoDB connection error: ${err.message}`);
+    });
+    
+    mongoose.connection.on('disconnected', () => {
+      logger.log('warning', 'MongoDB connection disconnected');
+    });
+    
   } catch (error) {
-    console.warn(`⚠️ MongoDB connection failed (${error.code}), using in-memory fallback`);
+    const errorCode = error.code || 'UNKNOWN_ERROR';
+    console.warn(`⚠️ MongoDB connection failed (${errorCode}), using in-memory fallback`);
     console.log(`
 📋 MongoDB Setup Required:
 1. Go to MongoDB Atlas (cloud.mongodb.com)
@@ -52,6 +63,11 @@ const mongoOptions = {
 
 The bot will work without MongoDB but won't save conversation history.
     `);
+    
+    // Exit if running in production and MongoDB is required
+    if (process.env.NODE_ENV === 'production' && !MONGODB_URI.includes('localhost')) {
+      process.exit(1);
+    }
   }
 })();
 
@@ -129,10 +145,13 @@ async function saveMemory(userId, context, summary, preferences = null, factChec
     const update = { 
       $set: {
         context: context.slice(-20),
-        ...(summary && { summary }),
-        ...(preferences !== null && { preferences }),
+        ...(summary && { summary: summary.substring(0, 500) }), // Limit summary length
+        ...(preferences !== null && { preferences: preferences.substring(0, 100) }), // Limit preferences
         ...(factCheckHistory !== null && { 
-          factCheckHistory: factCheckHistory.slice(-50) 
+          factCheckHistory: {
+            $each: factCheckHistory.slice(-50),
+            $slice: -50
+          } 
         })
       }
     };
@@ -142,11 +161,13 @@ async function saveMemory(userId, context, summary, preferences = null, factChec
       update,
       { 
         upsert: true,
-        session: null, 
-        lean: true,
-        maxTimeMS: 5000
+        maxTimeMS: 5000,
+        writeConcern: {
+          w: 'majority',
+          j: true
+        }
       }
-    ).catch(e => console.debug('Optimized save failed:', e.code));
+    ).catch(e => logger.log('error', `Memory save failed: ${e.code}`));
   } catch (error) {
     if (error instanceof mongoose.Error.OperationalError) {
       console.debug('MongoDB operation failed:', error.message);
@@ -178,23 +199,27 @@ async function loadChannelMemory(channelId) {
 // Optimized channel message save with direct update
 async function saveChannelMessage(channelId, messageObj) {
   try {
+    const timestamp = new Date();
     await ChannelMemory.findOneAndUpdate(
       { channelId },
       { 
         $push: { 
           messages: { 
-            $each: [messageObj], 
+            $each: [{ ...messageObj, timestamp }], 
             $slice: -20,
-            $sort: 1 
+            $sort: { timestamp: 1 } 
           } 
         } 
       },
       { 
         upsert: true,
         projection: { _id: 0 },
-        maxTimeMS: 5000
+        maxTimeMS: 5000,
+        writeConcern: {
+          w: 'majority'
+        }
       }
-    ).exec().catch(e => console.debug('Channel save failed:', e.code));
+    ).exec().catch(e => logger.log('error', `Channel save failed: ${e.code}`));
   } catch (error) {
     console.debug('Channel save error:', error.code);
   }
@@ -522,7 +547,14 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildMembers, // Required for member caching
+    GatewayIntentBits.GuildMessageReactions // For future interactive features
   ],
+  partials: [
+    Partials.Message, 
+    Partials.Channel,
+    Partials.Reaction
+  ]
 });
 
 client.on("messageCreate", async (message) => {
