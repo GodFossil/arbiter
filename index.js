@@ -52,7 +52,8 @@ const mongoOptions = {
 
 The bot will work without MongoDB but won't save conversation history.
     `);
-  });
+  }
+})();
 
 // Optimized schemas with indexes and schema options
 const memorySchema = new mongoose.Schema({
