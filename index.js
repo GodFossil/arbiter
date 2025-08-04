@@ -41,6 +41,17 @@ const mongoOptions = {
     await mongoose.connect(MONGODB_URI, mongoOptions);
     console.log('✅ MongoDB connected successfully with pooling');
     
+    // Create indexes after connection
+    mongoose.connection.once('open', async () => {
+      try {
+        console.log('🔄 Creating database indexes...');
+        await mongoose.model('FactCheck').createIndexes();
+        console.log('✅ Indexes created successfully');
+      } catch (indexError) {
+        console.error('❌ Index creation failed:', indexError);
+      }
+    });
+
     // Add connection event listeners for better error handling
     mongoose.connection.on('error', err => {
       logger.log('error', `MongoDB connection error: ${err.message}`);
