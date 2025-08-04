@@ -1,5 +1,5 @@
 const express = require("express");
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { OpenAI } = require("openai");
 const mongoose = require("mongoose");
 const ClaimExtractor = require("./services/claimExtractor");
