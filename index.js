@@ -21,8 +21,12 @@ const app = express();
 app.get("/", (_, res) => res.send("Arbiter is online with enhanced misinformation detection."));
 app.listen(process.env.PORT || 3000, () => console.log("🌐 Web server running."));
 
-// 🔐 Environment
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim();
+// 🔐 Environment - enhanced validation
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN?.trim() || "";
+if (DISCORD_TOKEN.length !== 72 || !DISCORD_TOKEN.startsWith("MT")) {
+  console.error("❌ Invalid Discord token format - it should be 72 chars starting with MT");
+  process.exit(1);
+}
 const OPENAI_KEY = process.env.OPENAI_API_KEY || "default_openai_key";
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/arbiter";
 const EXA_API_KEY = process.env.EXA_API_KEY || "default_exa_key";
