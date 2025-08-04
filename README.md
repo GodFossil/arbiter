@@ -148,4 +148,113 @@ This enables continuous improvement and accuracy validation.
 
 ---
 
-*Arbiter helps maintain factual accuracy in Discord debates while respecting users and promoting media literacy.*
+*Arbiter helps maintain factual accuracy in Discord debates while respecting users and promoting media literacy.*# 🤖 Arbiter - Advanced Discord Misinformation Detection Bot
+
+![Arbiter Logo](https://example.com/arbiter-logo.png) *🛡️ Combating misinformation through AI-powered fact-checking*
+
+## ✨ Key Features
+
+- **Multi-Step Verification Process**  
+  4-stage pipeline ensuring reliable fact checks
+- **Source Reliability Analysis**  
+  Prioritizes .gov/.edu domains and peer-reviewed research
+- **Context-Aware Processing**  
+  Thread history analysis for better context understanding
+- **Educational Responses**  
+  Provides sources and explanations for transparency
+- **Performance Monitoring**  
+  Detailed analytics and error tracking
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Node.js 18+
+- MongoDB database
+- Discord Developer Account
+- OpenAI API Key
+- Google Search API Key
+
+### Installation
+```bash
+# Clone repository
+git clone https://github.com/yourusername/arbiter.git
+cd arbiter
+
+# Install dependencies
+npm install
+
+# Set up environment variables (create .env file)
+cp .env.example .env
+```
+
+### Configuration (.env)
+```ini
+DISCORD_TOKEN=your_discord_bot_token
+OPENAI_API_KEY=your_openai_key
+MONGODB_URI=mongodb://localhost:27017/arbiter
+EXA_API_KEY=your_exa_search_key
+```
+
+## 🤖 Bot Features Deep Dive
+
+### Fact-Checking Process
+1. **Claim Extraction** - Identifies verifiable statements
+2. **Plausibility Check** - Initial AI assessment
+3. **Source Verification** - Aggregates authoritative evidence
+4. **Confidence Scoring** - Calculates verification certainty
+
+```mermaid
+graph TD
+  A[Message Received] --> B{Contains Claim?}
+  B -->|Yes| C[Verify Claim]
+  B -->|No| D[Monitor Context]
+  C --> E[Return Analysis]
+  D --> F[Update Conversation History]
+```
+
+### Interactive Commands
+- `@Arbiter explain` - Detailed confidence breakdown
+- `@Arbiter sources` - Show verification sources
+- `@Arbiter challenge` - Dispute a fact-check
+- `@Arbiter history` - Show user fact-check record
+
+## 🛠️ Technical Architecture
+
+### Core Technologies
+- **AI Processing**: GPT-4o
+- **Database**: MongoDB with TTL indexes
+- **Search**: Exa.ai Web Search API
+- **Error Handling**: Circuit breaker pattern
+- **Caching**: Tiered content caching system
+
+### Security Features
+- High confidence thresholds (>80%)
+- Source credibility scoring
+- Error fallback systems
+- Rate limiting protection
+- Audit logging
+
+## 📊 Database Schema
+
+```javascript
+{
+  users: {
+    userId: String,
+    factChecks: [{
+      claim: String,
+      status: String,
+      confidence: Number,
+      sources: Array
+    }]
+  },
+  channels: {
+    messageHistory: Array,
+    factCheckAlerts: Array
+  }
+}
+```
+
+## 📜 License
+MIT License - See [LICENSE](LICENSE) for details
+
+> **Note:** This project follows strict ethical AI guidelines and prioritizes transparency in its operations. Human verification is always recommended for critical decisions.
