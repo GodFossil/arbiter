@@ -1,37 +1,30 @@
-// Load the correct constructor depending on the weirdness of the package's export
-let GoogleGenerativeAI =
-  require('@google/genai').GoogleGenerativeAI ||
-  require('@google/genai').default ||
-  require('@google/genai');
+// gemini.js
+const axios = require('axios');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-
-async function geminiFactCheck(msg, context = "", type = "factcheck") {
-  const prompt = (type === "factcheck"
-    ? `You're an experienced fact-checker. ONLY answer as JSON:` +
-      `{"flag":true|false,"type":"(fact inaccuracy|contradiction|fallacy)","confidence":0-1,"reason":<short string>}\n` +
-      `Message: """${msg}"""\nWeb context:\n${context}\n`
-    : msg);
-
-  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-  try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    if (type === "factcheck") {
-      try {
-        return JSON.parse(text);
-      } catch {
-        return { flag: false, confidence: 0, reason: text };
-      }
+async function geminiRequest(prompt, modelNames, opts = {}) {
+  for (const model of modelNames) {
+    try {
+      const res = await axios.post(
+        `${GEMINI_URL}/${model}:generateContent?key=${GEMINI_KEY}`,
+        {
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          ...opts,
+        }
+      );
+      const text = res.data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) return { result: text, modelUsed: model };
+    } catch (err) {
+      if (model === modelNames[modelNames.length - 1]) throw err;
     }
-    return { reason: text };
-  } catch (err) {
-    console.error("Gemini SDK error:", err);
-    return { flag: false, confidence: 0, reason: "Error or unauthenticated." };
   }
+  throw new Error("All Gemini models failed");
 }
 
-module.exports = { geminiFactCheck };
+exports.geminiBackground = (prompt, opts) =>
+  geminiRequest(prompt, ['gemini-2.5-flash-lite', 'exa'], opts);
+
+exports.geminiUserFacing = (prompt, opts) =>
+  geminiRequest(prompt, ['gemini-2.5-pro', 'gemini-2.5-flash'], opts);
