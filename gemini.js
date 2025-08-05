@@ -1,4 +1,8 @@
-const GoogleGenerativeAI = require('@google/genai').default;
+// Load the correct constructor depending on the weirdness of the package's export
+let GoogleGenerativeAI =
+  require('@google/genai').GoogleGenerativeAI ||
+  require('@google/genai').default ||
+  require('@google/genai');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
