@@ -220,4 +220,22 @@ class InteractiveVerifier {
     }
 
     getSelectedSource(interaction) {
-        //
+        // This would need to be implemented based on your actual source selection mechanism
+        // For now, returning a mock source
+        return {
+            url: 'https://example.com',
+            title: 'Example Source'
+        };
+    }
+
+    getReliabilityColor(reliability) {
+        switch (reliability) {
+            case 'high': return 0x00ff00;
+            case 'medium': return 0xffff00;
+            case 'low': return 0xff0000;
+            default: return 0x808080;
+        }
+    }
+}
+
+module.exports = new InteractiveVerifier();
