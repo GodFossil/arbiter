@@ -20,7 +20,6 @@ console.log("ENV:", {
   EXA_API_KEY: !!process.env.EXA_API_KEY,
   EXA_API_URL: process.env.EXA_API_URL,
   MONGODB_URI: process.env.MONGODB_URI,
-  MONGODB_DB: process.env.MONGODB_DB,
   CHANNEL_ID_WHITELIST: process.env.CHANNEL_ID_WHITELIST,
 });
 
