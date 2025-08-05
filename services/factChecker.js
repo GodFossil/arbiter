@@ -1,138 +1,38 @@
-const claimExtractor = require('./claimExtractor');
-const FactCheck = require('./FactCheck');
-const confidenceScorer = require('./confidenceScorer');
-const sourceVerifier = require('./sourceVerifier');
-const webSearch = require('./webSearch');
-const contentFetcher = require('./contentFetcher');
-const contradictionDetector = require('./contradictionDetector');
-const cacheManager = require('./cacheManager');
+const { extractClaims } = require('./claimExtractor');
+const { webSearch } = require('./webSearch');
+const { verifySources } = require('./sourceVerifier');
+const { scoreConfidence } = require('./confidenceScorer');
+const { detectRelation } = require('./contradictionDetector');
 const logger = require('./logger');
-const errorHandler = require('./errorHandler');
 
-class FactChecker {
-    constructor() {
-        this.maxClaimsPerMessage = 5;
-        this.maxSourcesPerClaim = 3;
-    }
+/**
+ * End-to-end fact-check pipeline for a single claim.
+ */
+async function factCheckClaim(claim) {
+  try {
+    const searchResults = await webSearch(claim);
+    if (!searchResults.length) return { claim, verdict: 'No sources found', sources: [], confidence: 0 };
 
-    async processMessage(message, context = {}) {
-        try {
-            logger.info(`Processing message: ${message.substring(0, 100)}...`);
+    const verified = await verifySources(claim, searchResults);
+    const confidence = await scoreConfidence(claim, verified);
+    const verdict = confidence >= 0.8 ? 'Accurate' : confidence >= 0.5 ? 'Mostly accurate' : 'Needs context';
 
-            // Check cache
-            const cacheKey = `factcheck:${Buffer.from(message).toString('base64')}`;
-            const cached = cacheManager.get(cacheKey);
-            if (cached) {
-                logger.info('Returning cached result');
-                return cached;
-            }
-
-            // Extract claims
-            const claims = await claimExtractor.extractWithContext(message, context);
-            if (claims.length === 0) {
-                return { type: 'no_claims', message: 'No factual claims found to check.' };
-            }
-
-            // Limit claims
-            const limitedClaims = claims.slice(0, this.maxClaimsPerMessage);
-
-            // Process each claim
-            const results = await Promise.all(
-                limitedClaims.map(claim => this.processClaim(claim))
-            );
-
-            // Check for contradictions
-            const contradictions = await contradictionDetector.detectContradictions(results);
-
-            const finalResult = {
-                type: 'fact_check',
-                originalMessage: message,
-                claims: results,
-                contradictions,
-                timestamp: new Date().toISOString()
-            };
-
-            // Cache result
-            cacheManager.set(cacheKey, finalResult, 30);
-
-            return finalResult;
-        } catch (error) {
-            logger.error('Error processing message:', error);
-            return await errorHandler.handle(error, { type: 'fact_check', message });
-        }
-    }
-
-    async processClaim(claim) {
-        try {
-            // Search for sources
-            const searchResults = await webSearch.search(claim.claim);
-            const topSources = searchResults.slice(0, this.maxSourcesPerClaim);
-
-            // Verify sources
-            const verifiedSources = await Promise.all(
-                topSources.map(source => sourceVerifier.verify(source))
-            );
-
-            // Filter reliable sources
-            const reliableSources = verifiedSources.filter(s => s.reliability !== 'low');
-
-            // Fact-check
-            const factCheckResult = await FactCheck.check(claim.claim, reliableSources);
-
-            // Calculate confidence
-            const confidence = await confidenceScorer.calculateScore(claim.claim, reliableSources);
-
-            // Fetch full content for top sources
-            const detailedSources = await Promise.all(
-                reliableSources.slice(0, 2).map(async source => {
-                    try {
-                        const content = await contentFetcher.fetchContent(source.url);
-                        return { ...source, content: content.content };
-                    } catch (error) {
-                        logger.warn(`Failed to fetch content for ${source.url}`);
-                        return source;
-                    }
-                })
-            );
-
-            return {
-                ...claim,
-                factCheck: factCheckResult,
-                confidence,
-                sources: detailedSources,
-                checkedAt: new Date().toISOString()
-            };
-        } catch (error) {
-            logger.error('Error processing claim:', error);
-            return {
-                ...claim,
-                factCheck: {
-                    verdict: 'error',
-                    confidence: 0,
-                    explanation: 'Failed to process claim'
-                },
-                sources: [],
-                error: error.message
-            };
-        }
-    }
-
-    async quickCheck(message) {
-        try {
-            const claims = await claimExtractor.extractClaims(message);
-            if (claims.length === 0) return null;
-
-            const result = await FactCheck.quickCheck(claims[0].claim);
-            return {
-                claim: claims[0].claim,
-                verdict: result.verdict,
-                confidence: result.confidence
-            };
-        } catch (error) {
-            logger.error('Error in quick check:', error);
-            return null;
-        }
-    }
+    return { claim, verdict, sources: verified, confidence };
+  } catch (err) {
+    logger.error('factCheckClaim error:', err);
+    return { claim, verdict: 'Error', sources: [], confidence: 0 };
+  }
 }
 
-module.exports = new FactChecker();
+/**
+ * Fact-check an entire message (may contain many claims).
+ */
+async function factCheckMessage(text) {
+  const claims = await extractClaims(text);
+  if (!claims.length) return [];
+
+  const results = await Promise.all(claims.map(async c => ({ ...(await factCheckClaim(c)), claim: c })));
+  return results.filter(r => r.confidence < 0.8 || r.verdict === 'Error'); // only report low-confidence or errors
+}
+
+module.exports = { factCheckClaim, factCheckMessage };
