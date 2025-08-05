@@ -5,7 +5,6 @@ const { connect } = require("./mongo");
 const { geminiUserFacing, geminiBackground } = require("./gemini");
 const { exaWebSearch, exaNewsSearch } = require("./exa");
 
-// Express keepalive for Render
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter Discord bot - OK'));
@@ -24,14 +23,12 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
   : null;
 
-// --- In-memory cache for recent user and channel histories ---
-const historyCache = {
-  user: new Map(),
-  channel: new Map()
-};
-const HISTORY_TTL_MS = 4000;
+// -------- Caching, Limits, and Summaries ---------
+const historyCache = { user: new Map(), channel: new Map() };
+const HISTORY_TTL_MS = 4000; // Cache interval
+const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 50; // Limit for full messages
+const SUMMARY_BLOCK_SIZE = 10; // How many messages to summarize at a time
 
-// Cached fetch for user's recent messages in a channel
 async function fetchUserHistory(userId, channelId, limit = 5) {
   const key = `${userId}:${channelId}:${limit}`;
   const now = Date.now();
@@ -41,7 +38,7 @@ async function fetchUserHistory(userId, channelId, limit = 5) {
   }
   const db = await connect();
   const data = await db.collection("messages")
-    .find({ user: userId, channel: channelId })
+    .find({ type: "message", user: userId, channel: channelId })
     .sort({ ts: -1 })
     .limit(limit)
     .toArray();
@@ -49,7 +46,6 @@ async function fetchUserHistory(userId, channelId, limit = 5) {
   return data;
 }
 
-// Cached fetch for all recent messages in a channel
 async function fetchChannelHistory(channelId, limit = 7) {
   const key = `${channelId}:${limit}`;
   const now = Date.now();
@@ -58,16 +54,80 @@ async function fetchChannelHistory(channelId, limit = 7) {
     return cached.data;
   }
   const db = await connect();
-  const data = await db.collection("messages")
-    .find({ channel: channelId, content: { $exists: true } })
-    .sort({ ts: -1 })
-    .limit(limit)
-    .toArray();
-  historyCache.channel.set(key, { time: now, data });
-  return data;
+  // Fetch both recent full messages and recent summaries
+  const [full, summaries] = await Promise.all([
+    db.collection("messages")
+      .find({ type: "message", channel: channelId, content: { $exists: true } })
+      .sort({ ts: -1 })
+      .limit(limit)
+      .toArray(),
+    db.collection("messages")
+      .find({ type: "summary", channel: channelId })
+      .sort({ ts: -1 })
+      .limit(3)
+      .toArray()
+  ]);
+  // Merge: summaries go first, then messages (chronologically)
+  const result = [...summaries.reverse(), ...full.reverse()];
+  historyCache.channel.set(key, { time: now, data: result });
+  return result;
 }
 
-/** Utility: Gemini Flash Lite prompt for cheap background tasks */
+// Save message while managing per-channel memory and summaries
+async function saveUserMessage(msg) {
+  const db = await connect();
+  // Insert the new message
+  await db.collection("messages").insertOne({
+    type: "message",
+    user: msg.author.id,
+    username: msg.author.username,
+    channel: msg.channel.id,
+    content: msg.content,
+    ts: new Date(),
+  });
+
+  // Prune if over limit (preserve only newest N)
+  const count = await db.collection("messages").countDocuments({
+    type: "message", channel: msg.channel.id
+  });
+  if (count > MAX_CONTEXT_MESSAGES_PER_CHANNEL) {
+    const toSummarize = await db.collection("messages")
+      .find({ type: "message", channel: msg.channel.id })
+      .sort({ ts: 1 })
+      .limit(SUMMARY_BLOCK_SIZE)
+      .toArray();
+    if (toSummarize.length > 0) {
+      const summaryPrompt = `
+Summarize briefly the main interactions, themes and points of the following Discord channel messages. Ignore spam and greetings.
+Messages:
+${toSummarize.map(m => `${m.username}: ${m.content}`).join("\n")}
+Summary:
+`.trim();
+      let summary = "";
+      try {
+        const { result } = await geminiBackground(summaryPrompt, { modelOverride: "gemini-2.5-flash-lite" });
+        summary = result;
+      } catch (e) {
+        summary = "[failed to summarize]";
+        console.warn("Summary error:", e);
+      }
+      await db.collection("messages").insertOne({
+        type: "summary",
+        channel: msg.channel.id,
+        startTs: toSummarize[0].ts,
+        endTs: toSummarize[toSummarize.length - 1].ts,
+        summary,
+        ts: new Date()
+      });
+      // Remove the summarized block
+      await db.collection("messages").deleteMany({
+        _id: { $in: toSummarize.map(m => m._id) }
+      });
+    }
+  }
+}
+
+/** Utility for cheap LLM */
 async function geminiFlash(prompt, opts) {
   return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
 }
@@ -76,172 +136,141 @@ client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
-client.on("messageCreate", async (msg) => {
-  if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
-  if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
+// ------------- CONTRADICTION/MISINFO DETECTION ---------------
+async function detectContradictionOrMisinformation(msg) {
+  const db = await connect();
+  // 1. Check if user has history in this channel (last 10 messages)
+  const userMessages = await db.collection("messages")
+    .find({ type: "message", user: msg.author.id, channel: msg.channel.id, _id: { $ne: msg.id } })
+    .sort({ ts: -1 })
+    .limit(10)
+    .toArray();
 
-  // Store user message in DB (log errors only)
-  try {
-    const db = await connect();
-    await db.collection("messages").insertOne({
-      user: msg.author.id,
-      username: msg.author.username,
-      channel: msg.channel.id,
-      content: msg.content,
-      ts: new Date(),
-    });
-  } catch (e) {
-    console.warn("DB insert error:", e);
+  // 2. Check contradiction with previous user messages (Gemini determines this)
+  let contradiction = null;
+  if (userMessages.length > 0) {
+    const concatenated = userMessages.map(m => `${m.content}`).reverse().join("\n");
+    const contradictionPrompt = `
+You are a careful contradiction detector.
+Compare the [Previous statements] and the [New message] from the *same user* below.
+Is there a direct contradiction? Only reply in JSON:
+{"contradiction":"yes"|"no", "evidence":"...", "reason":"..."}
+[Previous statements]
+${concatenated}
+[New message]
+${msg.content}
+`.trim();
+    try {
+      const { result } = await geminiFlash(contradictionPrompt);
+      let parsed = null;
+      try {
+        const match = result.match(/\{[\s\S]*?\}/);
+        if (match) parsed = JSON.parse(match[0]);
+      } catch {}
+      if (parsed && parsed.contradiction === "yes") {
+        contradiction = parsed;
+      }
+    } catch (e) {
+      console.warn("Contradiction detection error:", e);
+    }
   }
 
-  // --- BACKGROUND FACT CHECK (surface contradiction only) ---
-  (async () => {
-    let claimSummary = null, exaResults = null, finalFactCheck = null;
-    let factCheckVerdict = null;
-    try {
-      // Stage 1: Summarize claim
-      let stage1Prompt = `
-Summarize the core factual claim or assertion (if any) in the following user message. 
-- Quote or paraphrase only the main claim, in 1 line.
-- Respond with just the claim. If there is no explicit claim, respond with "NO CLAIM".
-User message:
-"${msg.content}"
-`.trim();
-      let stage1resp = null;
-      try {
-        stage1resp = await geminiFlash(stage1Prompt);
-        if (stage1resp && typeof stage1resp.result === "string") {
-          const line = stage1resp.result.replace(/^[\s"`]+|[\s"`]+$/g, "");
-          claimSummary = line && line.toUpperCase() !== "NO CLAIM" ? line : null;
-        }
-      } catch (e) {}
+  // 3. Misinformation check (web fact check, only if no contradiction)
+  let misinformation = null;
+  if (!contradiction) {
+    const exaResults = await exaWebSearch(msg.content, 5);
+    let context = "";
+    if (exaResults && exaResults.length > 0) {
+      context = exaResults
+        .slice(0, 3)
+        .map((r, i) => `Result #${i + 1} | Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
+        .join("\n\n");
+    }
+    if (context) {
+      const misinfoPrompt = `
+You are a careful fact-checking assistant.
+Does the [User message] contain blatant misinformation, as shown by contradiction with the [Web context]? Only respond when the message contains **misinformation**. Do not reply if the message is true, neutral, or off-topic.
 
-      // Stage 2: Exa search
-      let searchQuery = claimSummary || msg.content;
-      exaResults = [];
-      try {
-        exaResults = await exaWebSearch(searchQuery, 5);
-      } catch (e) {}
-
-      let context = '';
-      if (exaResults && exaResults.length > 0) {
-        context = exaResults
-          .slice(0, 3)
-          .map((r, i) => `Result #${i + 1} | Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
-          .join("\n\n");
-      } else {
-        context = '';
-      }
-
-      // Stage 3: Fact Check (show to user ONLY if contradiction)
-      // If context is missing, just log, don't reply
-      if (!context || exaResults.length === 0) {
-        factCheckVerdict = {
-          verdict: "inconclusive",
-          explanation: "Insufficient or no relevant web context was found to fact-check this claim.",
-          evidence: ""
-        };
-      } else if (claimSummary) {
-        const factCheckPrompt = `
-You are an expert, careful, and precise fact-checking assistant.
-
-Instructions:
-• Given a [User claim] and [Web context] (search results, may be unrelated or not address the claim).
-• If the web context does NOT directly address, support, or contradict the claim, or if context is ambiguous or off-topic, respond ONLY with {"verdict":"inconclusive","explanation":"Insufficient context","evidence":""}
-• If the claim IS directly contradicted by a snippet, quote it and explain.
-• NEVER guess or assume. Err on the side of "inconclusive" if unsure.
-
-Return your answer as strict JSON ONLY:
-{"verdict":"yes"|"no"|"inconclusive","explanation":"...","evidence":"..."}
-
-[User claim]
-${JSON.stringify(claimSummary)}
-
+Output strict JSON, only if there is *blatant* misinformation:
+{"misinformation":"yes", "reason":"...", "evidence":"..."}
+[User message]
+${msg.content}
 [Web context]
 ${context}
 `.trim();
 
-        try {
-          finalFactCheck = await geminiFlash(factCheckPrompt);
-
-          let parsed = null;
-          try {
-            const jsonMatch = finalFactCheck.result.match(/\{[\s\S]*?\}/);
-            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-          } catch (err) {}
-
-          if (
-            !parsed ||
-            !parsed.verdict ||
-            !["yes", "no", "inconclusive"].includes(parsed.verdict)
-          ) {
-            factCheckVerdict = {
-              verdict: "inconclusive",
-              explanation: "No reliable LLM verdict could be retrieved.",
-              evidence: ""
-            };
-          } else {
-            factCheckVerdict = parsed;
-          }
-
-          // **Only reply if contradiction**
-          if (factCheckVerdict.verdict === "yes") {
-            try {
-              await msg.reply(
-                `⚠️ **Contradiction detected:**\n` +
-                `**Claim:** ${claimSummary}\n` +
-                `**Contradicted by:** ${factCheckVerdict.evidence}\n` +
-                `**Explanation:** ${factCheckVerdict.explanation}`
-              );
-            } catch {}
-          }
-
-        } catch (e) {
-          // Quietly log
-          console.warn("Fact-checker error:", e);
-        }
-      }
-      // Always store all fact checks in DB
       try {
-        const db = await connect();
-        await db.collection("fact_checks").insertOne({
-          msgId: msg.id,
-          user: msg.author.id,
-          content: msg.content,
-          claimSummary,
-          exaQuery: searchQuery,
-          exaResults,
-          geminiPrompt: context ? factCheckVerdict?.geminiPrompt : null,
-          geminiResult: finalFactCheck?.result || "",
-          geminiVerdict: factCheckVerdict?.verdict || null,
-          geminiExplanation: factCheckVerdict?.explanation || null,
-          geminiEvidence: factCheckVerdict?.evidence || null,
-          checkedAt: new Date()
-        });
-      } catch(e) {
-        console.warn("DB save (fact_checks) error:", e);
+        const { result } = await geminiFlash(misinfoPrompt);
+        let parsed = null;
+        try {
+          const match = result.match(/\{[\s\S]*?\}/);
+          if (match) parsed = JSON.parse(match[0]);
+        } catch {}
+        if (parsed && parsed.misinformation === "yes") {
+          misinformation = parsed;
+        }
+      } catch (e) {
+        console.warn("Misinformation detection error:", e);
       }
+    }
+  }
+
+  return { contradiction, misinformation };
+}
+
+// ===================== MAIN BOT LOGIC ==========================
+client.on("messageCreate", async (msg) => {
+  if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
+  if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
+
+  // Store message in DB (with pruning/summarization for scalable memory)
+  try {
+    await saveUserMessage(msg);
+  } catch (e) {
+    console.warn("DB store/prune error:", e);
+  }
+
+  // Detect if this message is a direct mention, a reply (to bot), or contains blatant contradiction/misinformation
+  const isMentioned = msg.mentions.has(client.user);
+  const isReplyToBot = (msg.reference && msg.reference.messageId);
+
+  // Always check for contradiction or misinformation in background
+  (async () => {
+    let detection = null;
+    try {
+      detection = await detectContradictionOrMisinformation(msg);
     } catch (e) {
-      console.warn("Multi-stage fact-check error:", e);
+      console.warn("Detection failure:", e);
     }
 
-    // Summarization (silently log errors)
-    try {
-      await geminiFlash(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
-    } catch (e) {
-      console.warn("Summarization error:", e);
+    // --- Surface only if contradiction or MISINFO detected ---
+    if (detection) {
+      if (detection.contradiction) {
+        try {
+          await msg.reply(
+            `⚡ **CONTRADICTION DETECTED** ⚡\n` +
+            `This message contradicts a prior statement you made:\n` +
+            `> ${detection.contradiction.evidence}\n` +
+            `Reason: ${detection.contradiction.reason}`
+          );
+        } catch {}
+      } else if (detection.misinformation) {
+        try {
+          await msg.reply(
+            `🚩 **MISINFORMATION DETECTED** 🚩\n` +
+            `Reason: ${detection.misinformation.reason}\n` +
+            (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}` : "")
+          );
+        } catch {}
+      }
     }
   })();
 
-  // --- USER-FACING: ONLY WHEN MENTIONED, REPLIED TO, OR (above) misinfo detected ---
-  if (
-    msg.mentions.has(client.user) ||
-    (msg.reference && msg.reference.messageId) // check for reply
-  ) {
+  // ---------------- USER-FACING REPLY PATH ----------------------
+  if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
 
-      // Fetch user and channel memory with robust error handling + cache
       let userHistoryArr = null, channelHistoryArr = null, userHistory = "", channelHistory = "";
       try {
         userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, 5);
@@ -268,7 +297,8 @@ ${context}
         ? userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n")
         : '';
       channelHistory = channelHistoryArr.length
-        ? channelHistoryArr.reverse().map(m => {
+        ? channelHistoryArr.map(m => {
+            if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
             if (m.user === msg.author.id) return `You: ${m.content}`;
             if (m.user === client.user.id) return `I: ${m.content}`;
             return (m.username || "User") + ": " + m.content;
@@ -299,7 +329,7 @@ ${context}
       }
 
       const prompt = `Today is ${dateString}.
-Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."
+Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. Include [SUMMARY]s if they help. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."
 [user history]
 ${userHistory}
 [channel context]
@@ -324,10 +354,11 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
         console.error("Discord reply failed:", e);
       }
 
-      // Store bot response in Mongo as a message
+      // Store bot reply in Mongo
       try {
         const db = await connect();
         await db.collection("messages").insertOne({
+          type: "message",
           user: client.user.id,
           username: client.user.username || "Arbiter",
           channel: msg.channel.id,
