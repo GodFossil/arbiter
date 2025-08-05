@@ -48,9 +48,8 @@ client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
-// Main handler, now with robust surfaced error handling
+// Main handler, now with robust surfaced error handling and improved fact check
 client.on("messageCreate", async (msg) => {
-  // Discord.js v14+: GuildText is 0, so this is robust:
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
@@ -76,32 +75,83 @@ client.on("messageCreate", async (msg) => {
     // FACT CHECK
     try {
       const exaResults = await exaWebSearch(msg.content, 5);
+
       let context = '';
       if (exaResults && exaResults.length > 0) {
         context = exaResults
           .slice(0, 3)
-          .map(r => `Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
+          .map((r, i) => `Result #${i+1} | Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
           .join("\n\n");
       }
+
       if (context) {
         const factCheckPrompt = `
-Message: "${msg.content}"
-Web context:
+You are an expert, careful, and precise fact-checking assistant.
+
+Your job:
+• Read the [User message] below.
+• Read the [Relevant web context] (selected search results, could be 0–3).
+• If the user's message contains an explicit **claim or statement of fact**, determine if any web context snippet *directly* supports or contradicts it.
+• If any snippet(s) *directly contradict* the claim, cite the snippet(s) **by quoting** them, and specify which part of the user's message is contradicted.
+• If none of the snippets clearly support or contradict the claim, answer "inconclusive" and say "Insufficient context".
+
+Return your answer in **strict JSON** of the form:
+{ "verdict": "yes"|"no"|"inconclusive", "explanation": "...", "evidence": "..." }
+
+• "verdict" is "yes" if there's a *clear contradiction*, "no" if the message is supported or not contradicted, "inconclusive" if you can't tell.
+• "evidence" is a quote from web context if "yes", or "" if not applicable.
+• Always use double quotes for all field values.
+
+[User message]
+${JSON.stringify(msg.content)}
+
+[Relevant web context]
 ${context}
-Does the message contain likely misinformation or contradiction compared to context? Respond with 'yes' or 'no' and one short sentence. Keep it brief.`;
+`.trim();
+
         try {
           const { result } = await geminiBackground(factCheckPrompt);
+
+          // Try to parse JSON from result. Gemini may add preface or code block formatting, so try to extract JSON block.
+          let parsed = null;
+          try {
+            // Find the first valid JSON object in the string
+            const jsonMatch = result.match(/\{[\s\S]*\}/);
+            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+          } catch (err) {
+            // fallback: treat as plain text
+          }
+
+          // Optional: Reply in thread if contradiction is found
+          if (parsed?.verdict === "yes") {
+            try {
+              await msg.reply(
+                `⚠️ Possible contradiction detected:\n` +
+                `**Claim:** ${msg.content}\n` +
+                `**Contradicted by:** ${parsed.evidence}\n` +
+                `**Explanation:** ${parsed.explanation}`
+              );
+            } catch {}
+          }
+
+          // Save all fact checks in DB, including details
           const db = await connect();
           await db.collection("fact_checks").insertOne({
             msgId: msg.id,
             user: msg.author.id,
             content: msg.content,
             exaResults,
+            geminiPrompt: factCheckPrompt,
             geminiResult: result,
+            geminiVerdict: parsed?.verdict || null,
+            geminiExplanation: parsed?.explanation || null,
+            geminiEvidence: parsed?.evidence || null,
             checkedAt: new Date()
           });
         } catch (e) {
-          try { await msg.reply(`Fact-checking failed: \`${e.message}\``); } catch {}
+          try {
+            await msg.reply(`Fact-checking failed: \`${e.message}\``);
+          } catch {}
           console.warn("Fact-checker error:", e);
         }
       }
