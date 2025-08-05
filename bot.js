@@ -16,29 +16,64 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.GuildMember, Partials.User]
 });
 
 const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
   : null;
 
-// -------- Caching, Limits, and Summaries ---------
+// ---- TUNEABLE PARAMETERS ----
 const historyCache = { user: new Map(), channel: new Map() };
-const HISTORY_TTL_MS = 4000; // Cache interval
-const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 50; // Limit for full messages
-const SUMMARY_BLOCK_SIZE = 10; // How many messages to summarize at a time
+const HISTORY_TTL_MS = 4000;
+const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
+const SUMMARY_BLOCK_SIZE = 20;
 
-// Do NOT include current message in user/channel context
-async function fetchUserHistory(userId, channelId, limit = 5, excludeMsgId = null) {
-  const key = `${userId}:${channelId}:${limit}:${excludeMsgId || ""}`;
+// UTILITIES: DisplayName/ChannelName/GuildName
+function getDisplayName(msg) {
+  if (!msg.guild) return msg.author.username;
+  const member = msg.guild.members.cache.get(msg.author.id) || msg.member;
+  if (member && member.displayName) return member.displayName;
+  return msg.author.username;
+}
+
+function getChannelName(msg) {
+  try {
+    return msg.channel.name || `id:${msg.channel.id}`;
+  } catch {
+    return `id:${msg.channel.id}`;
+  }
+}
+
+function getGuildName(msg) {
+  try {
+    return msg.guild?.name || `id:${msg.guildId || "?"}`;
+  } catch {
+    return `id:${msg.guildId || "?"}`;
+  }
+}
+
+// Get display name for user ID in a guild (async)
+async function getDisplayNameById(userId, guild) {
+  if (!guild) return userId;
+  try {
+    const member = await guild.members.fetch(userId);
+    return member.displayName || member.user.username || userId;
+  } catch {
+    return userId;
+  }
+}
+
+// --- HISTORY UTILS ---
+async function fetchUserHistory(userId, channelId, guildId, limit = 5, excludeMsgId = null) {
+  const key = `${userId}:${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
   const cached = historyCache.user.get(key);
   if (cached && (now - cached.time < HISTORY_TTL_MS)) {
     return cached.data;
   }
   const db = await connect();
-  const query = { type: "message", user: userId, channel: channelId };
+  const query = { type: "message", user: userId, channel: channelId, guildId };
   if (excludeMsgId) query._id = { $ne: excludeMsgId };
   const data = await db.collection("messages")
     .find(query)
@@ -48,28 +83,23 @@ async function fetchUserHistory(userId, channelId, limit = 5, excludeMsgId = nul
   historyCache.user.set(key, { time: now, data });
   return data;
 }
-async function fetchChannelHistory(channelId, limit = 7, excludeMsgId = null) {
-  const key = `${channelId}:${limit}:${excludeMsgId || ""}`;
+
+async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId = null) {
+  const key = `${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
   const cached = historyCache.channel.get(key);
   if (cached && (now - cached.time < HISTORY_TTL_MS)) {
     return cached.data;
   }
   const db = await connect();
-  // Fetch both recent full messages and recent summaries (optionally excludeMsgId)
   const [full, summaries] = await Promise.all([
     db.collection("messages")
-      .find({
-        type: "message",
-        channel: channelId,
-        content: { $exists: true },
-        ...(excludeMsgId && { _id: { $ne: excludeMsgId } })
-      })
+      .find({ type: "message", channel: channelId, guildId, content: { $exists: true }, ...(excludeMsgId && { _id: { $ne: excludeMsgId } }) })
       .sort({ ts: -1 })
       .limit(limit)
       .toArray(),
     db.collection("messages")
-      .find({ type: "summary", channel: channelId })
+      .find({ type: "summary", channel: channelId, guildId })
       .sort({ ts: -1 })
       .limit(3)
       .toArray()
@@ -79,31 +109,44 @@ async function fetchChannelHistory(channelId, limit = 7, excludeMsgId = null) {
   return result;
 }
 
+// --- MEMORY SAVE WITH IDENTITY META ---
 async function saveUserMessage(msg) {
   const db = await connect();
-  const res = await db.collection("messages").insertOne({
+  const doc = {
     type: "message",
     user: msg.author.id,
     username: msg.author.username,
+    displayName: getDisplayName(msg),
     channel: msg.channel.id,
+    channelName: getChannelName(msg),
+    guildId: msg.guildId || (msg.guild && msg.guild.id) || null,
+    guildName: getGuildName(msg),
+    isBot: msg.author.bot,
     content: msg.content,
     ts: new Date(),
-  });
-  // Prune if over channel memory cap
-  const count = await db.collection("messages").countDocuments({
-    type: "message", channel: msg.channel.id
-  });
+  };
+  const res = await db.collection("messages").insertOne(doc);
+
+  // Prune if over limit and summarize
+  const count = await db.collection("messages").countDocuments({ type: "message", channel: msg.channel.id, guildId: doc.guildId });
   if (count > MAX_CONTEXT_MESSAGES_PER_CHANNEL) {
     const toSummarize = await db.collection("messages")
-      .find({ type: "message", channel: msg.channel.id })
+      .find({ type: "message", channel: msg.channel.id, guildId: doc.guildId })
       .sort({ ts: 1 })
       .limit(SUMMARY_BLOCK_SIZE)
       .toArray();
     if (toSummarize.length > 0) {
+      let userDisplayNames = {};
+      if (msg.guild) {
+        const uniqueUserIds = [...new Set(toSummarize.map(m => m.user))];
+        await Promise.all(uniqueUserIds.map(
+          async uid => userDisplayNames[uid] = await getDisplayNameById(uid, msg.guild)
+        ));
+      }
       const summaryPrompt = `
-Summarize briefly the main interactions, themes and points of the following Discord channel messages. Ignore spam and greetings.
+Summarize the following Discord channel messages as a brief neutral log for posterity. Use users' display names when possible.
 Messages:
-${toSummarize.map(m => `${m.username}: ${m.content}`).join("\n")}
+${toSummarize.map(m => `${userDisplayNames[m.user] || m.username}: ${m.content}`).join("\n")}
 Summary:
 `.trim();
       let summary = "";
@@ -117,8 +160,12 @@ Summary:
       await db.collection("messages").insertOne({
         type: "summary",
         channel: msg.channel.id,
+        channelName: getChannelName(msg),
+        guildId: doc.guildId,
+        guildName: doc.guildName,
         startTs: toSummarize[0].ts,
         endTs: toSummarize[toSummarize.length - 1].ts,
+        users: Object.values(userDisplayNames),
         summary,
         ts: new Date()
       });
@@ -127,24 +174,57 @@ Summary:
       });
     }
   }
-  return res.insertedId; // Return inserted message id for exclusion
+  return res.insertedId;
 }
-/** Utility for cheap LLM */
+
+// --- ADMIN COMMANDS ---
+async function handleAdminCommands(msg) {
+  if (!msg.guild) return false;
+  const ownerId = msg.guild.ownerId || (await msg.guild.fetchOwner()).id;
+  if (msg.author.id !== ownerId) return false;
+
+  if (msg.content.startsWith("!arbiter_reset_channel")) {
+    try {
+      const db = await connect();
+      await db.collection("messages").deleteMany({ channel: msg.channel.id, guildId: msg.guildId });
+      await msg.reply("Channel memory erased.");
+      return true;
+    } catch (e) {
+      await msg.reply("Failed to erase channel memory.");
+      return true;
+    }
+  }
+  if (msg.content.startsWith("!arbiter_reset_user")) {
+    const match = msg.content.match(/<@!?(\d+)>/);
+    if (!match || !match[1]) {
+      await msg.reply("Usage: !arbiter_reset_user @user");
+      return true;
+    }
+    try {
+      const db = await connect();
+      await db.collection("messages").deleteMany({ user: match[1], channel: msg.channel.id, guildId: msg.guildId });
+      await msg.reply(`Cleared memory of user <@${match[1]}> in this channel.`);
+      return true;
+    } catch (e) {
+      await msg.reply("Failed to erase user memory.");
+      return true;
+    }
+  }
+  return false;
+}
 async function geminiFlash(prompt, opts) {
   return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
 }
 
-// ----------------- CONTRADICTION/MISINFO DETECTION -----------------
+// --- Contradiction/Misinfo detector---
 async function detectContradictionOrMisinformation(msg) {
   const db = await connect();
-  // 1. Check if user has history in this channel (last 10 messages)
   const userMessages = await db.collection("messages")
-    .find({ type: "message", user: msg.author.id, channel: msg.channel.id, _id: { $ne: msg.id } })
+    .find({ type: "message", user: msg.author.id, channel: msg.channel.id, guildId: msg.guildId, _id: { $ne: msg.id } })
     .sort({ ts: -1 })
     .limit(10)
     .toArray();
 
-  // 2. Contradiction with user's own history
   let contradiction = null;
   if (userMessages.length > 0) {
     const concatenated = userMessages.map(m => `${m.content}`).reverse().join("\n");
@@ -173,7 +253,6 @@ ${msg.content}
     }
   }
 
-  // 3. Misinformation check, only if no contradiction
   let misinformation = null;
   if (!contradiction) {
     const exaResults = await exaWebSearch(msg.content, 5);
@@ -212,7 +291,6 @@ ${context}
       }
     }
   }
-
   return { contradiction, misinformation };
 }
 
@@ -220,12 +298,15 @@ client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
-// ===================== MAIN BOT HANDLER ==========================
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // Save user message, get current message's DB ID
+  // ---- ADMIN COMMANDS ----
+  const handled = await handleAdminCommands(msg);
+  if (handled) return;
+
+  // Save user's message and get Mongo _id
   let thisMsgId = null;
   try {
     thisMsgId = await saveUserMessage(msg);
@@ -233,7 +314,6 @@ client.on("messageCreate", async (msg) => {
     console.warn("DB store/prune error:", e);
   }
 
-  // Precise @mention and "reply to bot" check (async fetch)
   const isMentioned = msg.mentions.has(client.user);
   let isReplyToBot = false;
   if (msg.reference && msg.reference.messageId) {
@@ -248,7 +328,7 @@ client.on("messageCreate", async (msg) => {
     }
   }
 
-  // -- Contradiction/Misinfo detection (background) --
+  // ---- CONTRADICTION/MISINFO ----
   (async () => {
     let detection = null;
     try {
@@ -278,26 +358,24 @@ client.on("messageCreate", async (msg) => {
     }
   })();
 
-  // -- USER-FACING: Only respond to mentions/replies to bot --
+  // ---- USER-FACING: ON MENTION / REPLY TO BOT ----
   if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
 
-      let userHistoryArr = null, channelHistoryArr = null, userHistory = "", channelHistory = "";
+      // Fetch histories, EXCLUDE current message
+      let userHistoryArr = null, channelHistoryArr = null;
       try {
-        // Fetch history, EXCLUDE the just-sent message
-        userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, 5, thisMsgId);
+        userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId);
       } catch (e) {
         userHistoryArr = null;
         try { await msg.reply(`Could not fetch your recent message history: \`${e.message}\``); } catch {}
-        console.warn("Fetch user history failed:", e);
       }
       try {
-        channelHistoryArr = await fetchChannelHistory(msg.channel.id, 7, thisMsgId);
+        channelHistoryArr = await fetchChannelHistory(msg.channel.id, msg.guildId, 7, thisMsgId);
       } catch (e) {
         channelHistoryArr = null;
         try { await msg.reply(`Could not fetch channel message history: \`${e.message}\``); } catch {}
-        console.warn("Fetch channel history failed:", e);
       }
       if (!userHistoryArr || !channelHistoryArr) {
         try {
@@ -306,17 +384,22 @@ client.on("messageCreate", async (msg) => {
         return;
       }
 
-      userHistory = userHistoryArr.length
-        ? userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n")
-        : '';
-      channelHistory = channelHistoryArr.length
-        ? channelHistoryArr.map(m => {
-            if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
-            if (m.user === msg.author.id) return `You: ${m.content}`;
-            if (m.user === client.user.id) return `I: ${m.content}`;
-            return (m.username || "User") + ": " + m.content;
-          }).join("\n")
-        : '';
+      // Use display names/nicknames in context; 'Arbiter' or 'The Arbiter' for itself (random context)
+      function botName() {
+        return Math.random() < 0.33 ? "Arbiter" :
+          (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
+      }
+      const userHistory = userHistoryArr.map(m => {
+        return `You: ${m.content}`;
+      }).reverse().join("\n");
+      const channelHistory = channelHistoryArr.map(m => {
+        if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
+        // User display
+        if (m.user === msg.author.id) return `${m.displayName || m.username}: ${m.content}`;
+        // Bot display (never 'the bot'/'Arbiter bot')
+        if (m.user === client.user.id) return `${botName()}: ${m.content}`;
+        return `${m.displayName || m.username || "User"}: ${m.content}`;
+      }).join("\n");
       const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
       // News detection
@@ -342,7 +425,7 @@ client.on("messageCreate", async (msg) => {
       }
 
       const prompt = `Today is ${dateString}.
-Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. Include [SUMMARY]s if they help. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."
+Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if they help. If [news] is present, focus on those results.
 [user history]
 ${userHistory}
 [channel context]
@@ -352,7 +435,6 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
 "${msg.content}"
 [reply]
 `;
-
       let replyText;
       try {
         const { result } = await geminiUserFacing(prompt);
@@ -360,21 +442,24 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
       } catch (e) {
         replyText = `AI reply failed: \`${e.message}\``;
       }
-
       try {
         await msg.reply(replyText);
       } catch (e) {
         console.error("Discord reply failed:", e);
       }
-
-      // Store bot reply in Mongo
+      // Store bot reply in Mongo with meta
       try {
         const db = await connect();
         await db.collection("messages").insertOne({
           type: "message",
           user: client.user.id,
           username: client.user.username || "Arbiter",
+          displayName: "Arbiter",
           channel: msg.channel.id,
+          channelName: getChannelName(msg),
+          guildId: msg.guildId,
+          guildName: getGuildName(msg),
+          isBot: true,
           content: replyText,
           ts: new Date()
         });
@@ -382,9 +467,7 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
         console.warn("DB insert error (bot reply):", e);
       }
     } catch (err) {
-      try {
-        await msg.reply(`Something went wrong: \`${err.message}\``);
-      } catch {}
+      try { await msg.reply(`Something went wrong: \`${err.message}\``); } catch {}
       console.error("Gemini user-facing failed:", err);
     }
   }
