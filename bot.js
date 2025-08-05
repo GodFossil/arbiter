@@ -3,7 +3,7 @@ const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType } = require("discord.js");
 const { connect } = require("./mongo");
 const { geminiUserFacing, geminiBackground } = require("./gemini");
-const { exaWebSearch, exaNewsSearch } = require("./exa");
+const axios = require("axios");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -29,31 +29,24 @@ const HISTORY_TTL_MS = 4000;
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
 
-// UTILITIES: DisplayName/ChannelName/GuildName
+// ---- PERSONALITY INJECTION ----
+const SYSTEM_INSTRUCTIONS = `
+You are the invaluable assistant of our Discord debate server. The server is called The Debate Server and it is a community full of brilliant interlocutors. You are to assist us by providing logical analyses and insights. You are to prioritize truth over appeasing others. You will hold no reservations in declaring a user valid or incorrect, provided that you determine either to be the case to the best of your ability. Your personality is calm, direct, bold, stoic, and wise. You are a master of mindfulness and all things philosophy. You are humble. You will answer prompts succinctly, directly, and in as few words as necessary. You will know that brevity is the soul of wit and wisdom. Your name is Arbiter, you may refer to yourself as The Arbiter.
+`.trim();
+
+// ---- UTILITIES ----
 function getDisplayName(msg) {
   if (!msg.guild) return msg.author.username;
   const member = msg.guild.members.cache.get(msg.author.id) || msg.member;
   if (member && member.displayName) return member.displayName;
   return msg.author.username;
 }
-
 function getChannelName(msg) {
-  try {
-    return msg.channel.name || `id:${msg.channel.id}`;
-  } catch {
-    return `id:${msg.channel.id}`;
-  }
+  try { return msg.channel.name || `id:${msg.channel.id}`; } catch { return `id:${msg.channel.id}`; }
 }
-
 function getGuildName(msg) {
-  try {
-    return msg.guild?.name || `id:${msg.guildId || "?"}`;
-  } catch {
-    return `id:${msg.guildId || "?"}`;
-  }
+  try { return msg.guild?.name || `id:${msg.guildId || "?"}`; } catch { return `id:${msg.guildId || "?"}`; }
 }
-
-// Get display name for user ID in a guild (async)
 async function getDisplayNameById(userId, guild) {
   if (!guild) return userId;
   try {
@@ -64,14 +57,12 @@ async function getDisplayNameById(userId, guild) {
   }
 }
 
-// --- HISTORY UTILS ---
+// ---- HISTORY UTILS ----
 async function fetchUserHistory(userId, channelId, guildId, limit = 5, excludeMsgId = null) {
   const key = `${userId}:${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
   const cached = historyCache.user.get(key);
-  if (cached && (now - cached.time < HISTORY_TTL_MS)) {
-    return cached.data;
-  }
+  if (cached && (now - cached.time < HISTORY_TTL_MS)) return cached.data;
   const db = await connect();
   const query = { type: "message", user: userId, channel: channelId, guildId };
   if (excludeMsgId) query._id = { $ne: excludeMsgId };
@@ -83,14 +74,11 @@ async function fetchUserHistory(userId, channelId, guildId, limit = 5, excludeMs
   historyCache.user.set(key, { time: now, data });
   return data;
 }
-
 async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId = null) {
   const key = `${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
   const cached = historyCache.channel.get(key);
-  if (cached && (now - cached.time < HISTORY_TTL_MS)) {
-    return cached.data;
-  }
+  if (cached && (now - cached.time < HISTORY_TTL_MS)) return cached.data;
   const db = await connect();
   const [full, summaries] = await Promise.all([
     db.collection("messages")
@@ -109,7 +97,7 @@ async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId =
   return result;
 }
 
-// --- MEMORY SAVE WITH IDENTITY META ---
+// ---- MEMORY SAVE WITH META ----
 async function saveUserMessage(msg) {
   const db = await connect();
   const doc = {
@@ -127,7 +115,6 @@ async function saveUserMessage(msg) {
   };
   const res = await db.collection("messages").insertOne(doc);
 
-  // Prune if over limit and summarize
   const count = await db.collection("messages").countDocuments({ type: "message", channel: msg.channel.id, guildId: doc.guildId });
   if (count > MAX_CONTEXT_MESSAGES_PER_CHANNEL) {
     const toSummarize = await db.collection("messages")
@@ -144,6 +131,7 @@ async function saveUserMessage(msg) {
         ));
       }
       const summaryPrompt = `
+${SYSTEM_INSTRUCTIONS}
 Summarize the following Discord channel messages as a brief neutral log for posterity. Use users' display names when possible.
 Messages:
 ${toSummarize.map(m => `${userDisplayNames[m.user] || m.username}: ${m.content}`).join("\n")}
@@ -177,46 +165,48 @@ Summary:
   return res.insertedId;
 }
 
-// --- ADMIN COMMANDS ---
+// ---- ADMIN: FULL RESET ----
 async function handleAdminCommands(msg) {
   if (!msg.guild) return false;
   const ownerId = msg.guild.ownerId || (await msg.guild.fetchOwner()).id;
   if (msg.author.id !== ownerId) return false;
 
-  if (msg.content.startsWith("!arbiter_reset_channel")) {
+  if (msg.content === "!arbiter_reset_all") {
     try {
       const db = await connect();
-      await db.collection("messages").deleteMany({ channel: msg.channel.id, guildId: msg.guildId });
-      await msg.reply("Channel memory erased.");
+      await db.collection("messages").deleteMany({});
+      await msg.reply("All memory erased. Arbiter reset to blank slate.");
       return true;
     } catch (e) {
-      await msg.reply("Failed to erase channel memory.");
-      return true;
-    }
-  }
-  if (msg.content.startsWith("!arbiter_reset_user")) {
-    const match = msg.content.match(/<@!?(\d+)>/);
-    if (!match || !match[1]) {
-      await msg.reply("Usage: !arbiter_reset_user @user");
-      return true;
-    }
-    try {
-      const db = await connect();
-      await db.collection("messages").deleteMany({ user: match[1], channel: msg.channel.id, guildId: msg.guildId });
-      await msg.reply(`Cleared memory of user <@${match[1]}> in this channel.`);
-      return true;
-    } catch (e) {
-      await msg.reply("Failed to erase user memory.");
+      await msg.reply("Failed to erase all memory.");
       return true;
     }
   }
   return false;
 }
+
+// ---- EXA ANSWER API ----
+const EXA_API_KEY = process.env.EXA_API_KEY;
+async function exaAnswer(query) {
+  try {
+    const res = await axios.post(
+      "https://api.exa.ai/answer",
+      { query, type: "neural" },
+      { headers: { Authorization: `Bearer ${EXA_API_KEY}` } }
+    );
+    return res.data.answer || "";
+  } catch (err) {
+    console.warn("Exa /answer failed:", err.message);
+    return "";
+  }
+}
+
+// ---- GEMINI UTILS ----
 async function geminiFlash(prompt, opts) {
   return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
 }
 
-// --- Contradiction/Misinfo detector---
+// ---- DETECTION LOGIC ----
 async function detectContradictionOrMisinformation(msg) {
   const db = await connect();
   const userMessages = await db.collection("messages")
@@ -229,6 +219,7 @@ async function detectContradictionOrMisinformation(msg) {
   if (userMessages.length > 0) {
     const concatenated = userMessages.map(m => `${m.content}`).reverse().join("\n");
     const contradictionPrompt = `
+${SYSTEM_INSTRUCTIONS}
 You are a careful contradiction detector.
 Compare the [Previous statements] and the [New message] from the *same user* below.
 Is there a direct contradiction? Only reply in JSON:
@@ -255,16 +246,10 @@ ${msg.content}
 
   let misinformation = null;
   if (!contradiction) {
-    const exaResults = await exaWebSearch(msg.content, 5);
-    let context = "";
-    if (exaResults && exaResults.length > 0) {
-      context = exaResults
-        .slice(0, 3)
-        .map((r, i) => `Result #${i + 1} | Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
-        .join("\n\n");
-    }
-    if (context) {
+    const answer = await exaAnswer(msg.content);
+    if (answer) {
       const misinfoPrompt = `
+${SYSTEM_INSTRUCTIONS}
 You are a careful fact-checking assistant.
 Does the [User message] contain blatant misinformation, as shown by contradiction with the [Web context]? Only respond when the message contains **misinformation**. Do not reply if the message is true, neutral, or off-topic.
 
@@ -273,7 +258,7 @@ Output strict JSON, only if there is *blatant* misinformation:
 [User message]
 ${msg.content}
 [Web context]
-${context}
+${answer}
 `.trim();
 
       try {
@@ -294,6 +279,7 @@ ${context}
   return { contradiction, misinformation };
 }
 
+// ---- MAIN HANDLER ----
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
@@ -302,11 +288,9 @@ client.on("messageCreate", async (msg) => {
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // ---- ADMIN COMMANDS ----
   const handled = await handleAdminCommands(msg);
   if (handled) return;
 
-  // Save user's message and get Mongo _id
   let thisMsgId = null;
   try {
     thisMsgId = await saveUserMessage(msg);
@@ -328,7 +312,7 @@ client.on("messageCreate", async (msg) => {
     }
   }
 
-  // ---- CONTRADICTION/MISINFO ----
+  // ---- BACKGROUND DETECTION ----
   (async () => {
     let detection = null;
     try {
@@ -358,12 +342,11 @@ client.on("messageCreate", async (msg) => {
     }
   })();
 
-  // ---- USER-FACING: ON MENTION / REPLY TO BOT ----
+  // ---- USER-FACING REPLIES ----
   if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
 
-      // Fetch histories, EXCLUDE current message
       let userHistoryArr = null, channelHistoryArr = null;
       try {
         userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId);
@@ -384,25 +367,18 @@ client.on("messageCreate", async (msg) => {
         return;
       }
 
-      // Use display names/nicknames in context; 'Arbiter' or 'The Arbiter' for itself (random context)
       function botName() {
-        return Math.random() < 0.33 ? "Arbiter" :
-          (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
+        return Math.random() < 0.33 ? "Arbiter" : (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
       }
-      const userHistory = userHistoryArr.map(m => {
-        return `You: ${m.content}`;
-      }).reverse().join("\n");
+      const userHistory = userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n");
       const channelHistory = channelHistoryArr.map(m => {
         if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
-        // User display
         if (m.user === msg.author.id) return `${m.displayName || m.username}: ${m.content}`;
-        // Bot display (never 'the bot'/'Arbiter bot')
         if (m.user === client.user.id) return `${botName()}: ${m.content}`;
         return `${m.displayName || m.username || "User"}: ${m.content}`;
       }).join("\n");
       const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
-      // News detection
       let newsSection = "";
       try {
         const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
@@ -410,12 +386,9 @@ client.on("messageCreate", async (msg) => {
           let topic = "world events";
           const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
           if (match) topic = match[2];
-          const exaNews = await exaNewsSearch(topic, 3);
-          if (exaNews.length) {
-            const newsSnippets = exaNews
-              .map(r => `• ${r.title.trim()} (${r.url})\n${r.text.trim().slice(0,160)}...`)
-              .join("\n");
-            newsSection = `Here are concise, real-time news results for "${topic}":\n${newsSnippets}\n`;
+          const answer = await exaAnswer(`latest news about ${topic}`);
+          if (answer) {
+            newsSection = `Here are concise, real-time news results for "${topic}":\n${answer}\n`;
           } else {
             newsSection = "No up-to-date news articles found for that topic.";
           }
@@ -424,7 +397,9 @@ client.on("messageCreate", async (msg) => {
         newsSection = `News search failed: \`${e.message}\``;
       }
 
-      const prompt = `Today is ${dateString}.
+      const prompt = `
+${SYSTEM_INSTRUCTIONS}
+Today is ${dateString}.
 Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if they help. If [news] is present, focus on those results.
 [user history]
 ${userHistory}
@@ -447,7 +422,6 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
       } catch (e) {
         console.error("Discord reply failed:", e);
       }
-      // Store bot reply in Mongo with meta
       try {
         const db = await connect();
         await db.collection("messages").insertOne({
