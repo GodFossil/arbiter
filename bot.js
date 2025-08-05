@@ -2,10 +2,14 @@ require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connect } = require("./mongo");
-const { geminiUserFacing, geminiBackground } = require("./gemini");
+const {
+  geminiFlashFactCheck,
+  geminiProFactCheck,
+  shouldUseGeminiPro,
+  incrementGeminiProUsage,
+} = require("./gemini");
 const { exaWebSearch, exaNewsSearch } = require("./exa");
 
-// Express keepalive for Render
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter Discord bot - OK'));
@@ -15,16 +19,15 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
 const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
   : null;
 
-// Fetch last N user messages in this channel
 async function fetchUserHistory(userId, channelId, limit = 5) {
   const db = await connect();
   return await db.collection("messages")
@@ -34,7 +37,6 @@ async function fetchUserHistory(userId, channelId, limit = 5) {
     .toArray();
 }
 
-// Fetch last K channel messages, including bots (with "I:" labeling for bot)
 async function fetchChannelHistory(channelId, limit = 7) {
   const db = await connect();
   return await db.collection("messages")
@@ -48,11 +50,66 @@ client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
+// ---- FACTCHECK - MULTI-LAYER LOGIC ----
+async function handleFactChecking(msg) {
+  // 1. Gather search context
+  let exaResults = [];
+  try {
+    exaResults = await exaWebSearch(msg.content, 5);
+  } catch {}
+  let context = '';
+  if (exaResults.length > 0) {
+    context = exaResults
+      .slice(0, 3)
+      .map(r => `Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
+      .join("\n\n");
+  }
+  if (!context) return;
+
+  // 2. FAST (FLASH) FACT CHECK
+  const flashResult = await geminiFlashFactCheck(msg.content, context);
+  if (!flashResult.flag || flashResult.confidence < 0.7) return;
+
+  // 3. PRO ESCALATION IF ENOUGH BUDGET (otherwise, fallback to high-confidence Flash)
+  let finalCheck = flashResult;
+  if (shouldUseGeminiPro()) {
+    const proResult = await geminiProFactCheck(msg.content, context, flashResult.type);
+    incrementGeminiProUsage();
+    if (proResult.flag && proResult.confidence > 0.85) {
+      finalCheck = proResult;
+    } else {
+      // Pro did not confirm, skip announcing/reporting/auditing this flag
+      return;
+    }
+  }
+  // Store in DB, optionally notify mods/channel
+  try {
+    const db = await connect();
+    await db.collection("fact_checks").insertOne({
+      msgId: msg.id,
+      user: msg.author.id,
+      content: msg.content,
+      exaResults,
+      factCheck: finalCheck,
+      checkedAt: new Date(),
+    });
+  } catch (e) {}
+
+  try {
+    if (finalCheck.confidence > 0.85) {
+      await msg.reply(
+        `⚠️ Possible misinformation or logical problem detected (${finalCheck.type || 'unspecified'}):\n` +
+        `> ${finalCheck.reason}\n_Context: (automated check, may be imperfect)_`
+      );
+    }
+  } catch {}
+}
+
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot || msg.channel.type !== 0) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // Store all user messages in MongoDB
+  // Store all user messages
   try {
     const db = await connect();
     await db.collection("messages").insertOne({
@@ -62,65 +119,18 @@ client.on("messageCreate", async (msg) => {
       content: msg.content,
       ts: new Date(),
     });
-  } catch (e) {
-    console.warn("DB insert error:", e);
-  }
+  } catch {}
 
-  // ------------ BACKGROUND TASKS ------------
-  (async () => {
-    try {
-      const exaResults = await exaWebSearch(msg.content, 5);
-      let context = '';
-      if (exaResults && exaResults.length > 0) {
-        context = exaResults
-          .slice(0, 3)
-          .map(r => `Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
-          .join("\n\n");
-      }
-      if (context) {
-        const factCheckPrompt = `
-Message: "${msg.content}"
-Web context:
-${context}
-Does the message contain likely misinformation or contradiction compared to context? Respond with 'yes' or 'no' and one short sentence. Keep it brief.`;
+  // --- Run background fact checking and automated logic ---
+  handleFactChecking(msg);
 
-        try {
-          const { result } = await geminiBackground(factCheckPrompt);
-          const db = await connect();
-          await db.collection("fact_checks").insertOne({
-            msgId: msg.id,
-            user: msg.author.id,
-            content: msg.content,
-            exaResults,
-            geminiResult: result,
-            checkedAt: new Date()
-          });
-        } catch (e) {
-          // Fact-check API error, can log if you want
-        }
-      }
-
-      // Summarization (optional)
-      try {
-        await geminiBackground(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
-      } catch (e) {
-        // Summarization error, can log if you want
-      }
-    } catch (e) {
-      // Top-level exaWebSearch failure (API error, connectivity, etc)
-      console.warn("Background Exa error:", e);
-    }
-  })();
-
-  // ------------ USER-FACING: SMART, CONTEXTUAL, BOT-AWARE ------------
+  // --- USER-FACING (@Arbiter) ---
   if (msg.mentions.has(client.user)) {
     try {
       await msg.channel.sendTyping();
-
-      // Fetch user memory, channel memory including bot (with "I:" for bot)
       const [userHistoryArr, channelHistoryArr] = await Promise.all([
         fetchUserHistory(msg.author.id, msg.channel.id, 5),
-        fetchChannelHistory(msg.channel.id, 7)
+        fetchChannelHistory(msg.channel.id, 7),
       ]);
       const userHistory = userHistoryArr.length
         ? userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n")
@@ -132,13 +142,10 @@ Does the message contain likely misinformation or contradiction compared to cont
             return (m.username || "User") + ": " + m.content;
           }).join("\n")
         : '';
-
-      // Date for prompt
       const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
-      // News detection
-      const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
       let newsSection = "";
+      const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
       if (newsRegex.test(msg.content)) {
         let topic = "world events";
         const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
@@ -146,50 +153,42 @@ Does the message contain likely misinformation or contradiction compared to cont
         try {
           const exaNews = await exaNewsSearch(topic, 3);
           if (exaNews.length) {
-            const newsSnippets = exaNews
-              .map(r => `• ${r.title.trim()} (${r.url})\n${r.text.trim().slice(0,160)}...`)
-              .join("\n");
-            newsSection = `Here are concise, real-time news results for "${topic}":\n${newsSnippets}\n`;
-          } else {
-            newsSection = "No up-to-date news articles found for that topic.";
-          }
-        } catch (e) {
-          newsSection = "Unable to retrieve news results right now.";
-        }
+            newsSection = `Here are concise, real-time news results for "${topic}":\n` +
+              exaNews.map(r => `• ${r.title.trim()} (${r.url})\n${r.text.trim().slice(0,160)}...`).join("\n") + "\n";
+          } else newsSection = "No up-to-date news articles found for that topic.";
+        } catch { newsSection = "Unable to retrieve news results right now."; }
       }
 
-      // Build prompt using first person for bot messages
-      const prompt = `Today is ${dateString}.
-Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."
-[user history]\n${userHistory}
-[channel context]\n${channelHistory}
-${newsSection ? `[news]\n${newsSection}` : ""}
-[user message]\n"${msg.content}"
-[reply]
-`;
+      const prompt =
+        `Today is ${dateString}.\n` +
+        `Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."\n` +
+        `[user history]\n${userHistory}\n[channel context]\n${channelHistory}\n${newsSection ? `[news]\n${newsSection}` : ""}\n` +
+        `[user message]\n"${msg.content}"\n[reply]`;
 
-      // Generate Gemini response
-      const { result } = await geminiUserFacing(prompt);
-      await msg.reply(result);
+      // Pro for user, fallback to Flash if out of quota
+      let result;
+      if (shouldUseGeminiPro()) {
+        result = await geminiProFactCheck(prompt, "", "response");
+        incrementGeminiProUsage();
+      } else {
+        result = await geminiFlashFactCheck(prompt, "", "response");
+      }
 
-      // --- Store bot response in Mongo as a message for context ---
+      await msg.reply(result.reason || result);
+
+      // Store bot response as context for future
       try {
         const db = await connect();
         await db.collection("messages").insertOne({
           user: client.user.id,
           username: client.user.username || "Arbiter",
           channel: msg.channel.id,
-          content: result,
-          ts: new Date()
+          content: result.reason || result,
+          ts: new Date(),
         });
-      } catch (e) {
-        console.warn("DB insert error (bot reply):", e);
-      }
+      } catch {}
     } catch (err) {
-      console.error("Gemini user-facing failed:", err);
-      try {
-        await msg.reply("Can't fetch info right now.");
-      } catch (e) {}
+      try { await msg.reply("Can't fetch info right now."); } catch {}
     }
   }
 });
