@@ -44,12 +44,17 @@ async function fetchChannelHistory(channelId, limit = 7) {
     .toArray();
 }
 
+/** Utility: Gemini Flash Lite prompt for cheap background tasks */
+async function geminiFlash(prompt, opts) {
+  // Manually call with flash-lite for lowest cost
+  return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
+}
+
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
 client.on("messageCreate", async (msg) => {
-  // Discord.js v14: ChannelType.GuildText is 0
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
@@ -70,65 +75,87 @@ client.on("messageCreate", async (msg) => {
     console.warn("DB insert error:", e);
   }
 
-  // --- BACKGROUND: FACT CHECK & SUMMARIZATION ---
+  // --- MULTI-STAGE FACT CHECK (BACKGROUND) ---
   (async () => {
-    // Fact check
+    let claimSummary = null, exaResults = null, finalFactCheck = null;
     try {
-      const exaResults = await exaWebSearch(msg.content, 5);
+      // --- Stage 1: Summarize the main claim ---
+      let stage1Prompt = `
+Summarize the core factual claim or assertion (if any) in the following user message. 
+- Quote or paraphrase only the main claim, in 1 line.
+- Respond with just the claim. If there is no explicit claim, respond with "NO CLAIM".
+User message:
+"${msg.content}"
+`.trim();
+      let stage1resp = null;
+      try {
+        stage1resp = await geminiFlash(stage1Prompt);
+        if (stage1resp && typeof stage1resp.result === "string") {
+          const line = stage1resp.result.replace(/^[\s"`]+|[\s"`]+$/g, ""); // Cleanup
+          claimSummary = line && line.toUpperCase() !== "NO CLAIM" ? line : null;
+        }
+      } catch (e) {
+        claimSummary = null;
+      }
+
+      // --- Stage 2: Exa Search on the main claim (if found), otherwise fallback to original message ---
+      let searchQuery = claimSummary || msg.content;
+      exaResults = [];
+      try {
+        exaResults = await exaWebSearch(searchQuery, 5);
+      } catch (e) {
+        exaResults = [];
+      }
 
       let context = '';
       if (exaResults && exaResults.length > 0) {
         context = exaResults
           .slice(0, 3)
-          .map((r, i) => `Result #${i+1} | Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
+          .map((r, i) => `Result #${i + 1} | Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
           .join("\n\n");
+      } else {
+        context = '(No relevant web results found.)';
       }
 
-      if (context) {
+      // --- Stage 3: Fact check verdict ---
+      if (context && claimSummary) {
         const factCheckPrompt = `
 You are an expert, careful, and precise fact-checking assistant.
-
 Your job:
-• Read the [User message] below.
-• Read the [Relevant web context] (selected search results, could be 0–3).
-• If the user's message contains an explicit **claim or statement of fact**, determine if any web context snippet *directly* supports or contradicts it.
-• If any snippet(s) *directly contradict* the claim, cite the snippet(s) **by quoting** them, and specify which part of the user's message is contradicted.
+• Given a [User claim] and [Web context] (selected search results, could be 0-3).
+• If the user's claim is **directly contradicted** by any web snippet, tell which snippet(s), quote them, and specify which part of the claim is contradicted.
 • If none of the snippets clearly support or contradict the claim, answer "inconclusive" and say "Insufficient context".
 
-Return your answer in **strict JSON** of the form:
+Give your response as strict JSON:
 { "verdict": "yes"|"no"|"inconclusive", "explanation": "...", "evidence": "..." }
+- "verdict": "yes" if there is a clear contradiction, "no" if consistent or unaddressed, "inconclusive" if context is insufficient.
+- "evidence": Only a quote from web context if "yes", else "".
+- Always use double quotes for all field values.
 
-• "verdict" is "yes" if there's a *clear contradiction*, "no" if the message is supported or not contradicted, "inconclusive" if you can't tell.
-• "evidence" is a quote from web context if "yes", or "" if not applicable.
-• Always use double quotes for all field values.
+[User claim]
+${JSON.stringify(claimSummary)}
 
-[User message]
-${JSON.stringify(msg.content)}
-
-[Relevant web context]
+[Web context]
 ${context}
 `.trim();
 
         try {
-          const { result } = await geminiBackground(factCheckPrompt);
+          finalFactCheck = await geminiFlash(factCheckPrompt);
 
-          // --- Parse Gemini output as strict JSON ---
+          // Parse JSON (even if Gemini adds formatting)
           let parsed = null;
           try {
-            // Try to extract JSON, even if wrapped in Markdown/code block or with preamble
-            const jsonMatch = result.match(/\{[\s\S]*?\}/);
+            const jsonMatch = finalFactCheck.result.match(/\{[\s\S]*?\}/);
             if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-          } catch (err) {
-            parsed = null;
-          }
+          } catch (err) {}
 
-          // Only surface findings if verdict is "yes" or "inconclusive"
+          // Surface only "yes" or "inconclusive"
           if (parsed) {
             if (parsed.verdict === "yes") {
               try {
                 await msg.reply(
                   `⚠️ **Contradiction detected:**\n` +
-                  `**Claim:** ${msg.content}\n` +
+                  `**Claim:** ${claimSummary}\n` +
                   `**Contradicted by:** ${parsed.evidence}\n` +
                   `**Explanation:** ${parsed.explanation}`
                 );
@@ -137,26 +164,30 @@ ${context}
               try {
                 await msg.reply(
                   `⚠️ **Fact-check inconclusive:**\n` +
+                  `**Claim:** ${claimSummary}\n` +
                   `**Explanation:** ${parsed.explanation}`
                 );
               } catch {}
             }
           }
 
-          // Save all fact checks in DB, parse or not
+          // Store all stages and verdict in DB
           const db = await connect();
           await db.collection("fact_checks").insertOne({
             msgId: msg.id,
             user: msg.author.id,
             content: msg.content,
+            claimSummary,
+            exaQuery: searchQuery,
             exaResults,
             geminiPrompt: factCheckPrompt,
-            geminiResult: result,
+            geminiResult: finalFactCheck.result,
             geminiVerdict: parsed?.verdict || null,
             geminiExplanation: parsed?.explanation || null,
             geminiEvidence: parsed?.evidence || null,
             checkedAt: new Date()
           });
+
         } catch (e) {
           try {
             await msg.reply(`Fact-checking failed: \`${e.message}\``);
@@ -166,11 +197,12 @@ ${context}
       }
     } catch (e) {
       try { await msg.reply(`Error during background info retrieval: \`${e.message}\``); } catch {}
-      console.warn("Background Exa error:", e);
+      console.warn("Multi-stage fact-check error:", e);
     }
-    // Summarization
+
+    // Summarization (unchanged)
     try {
-      await geminiBackground(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
+      await geminiFlash(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
     } catch (e) {
       try { await msg.reply(`Summarization failed: \`${e.message}\``); } catch {}
       console.warn("Summarization error:", e);
@@ -276,5 +308,4 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
   }
 });
 
-// Login!
 client.login(process.env.DISCORD_TOKEN);
