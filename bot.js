@@ -67,13 +67,12 @@ async function fetchChannelHistory(channelId, limit = 7) {
       .limit(3)
       .toArray()
   ]);
-  // Merge: summaries go first, then messages (chronologically)
+  // Merge summaries then messages (chronologically)
   const result = [...summaries.reverse(), ...full.reverse()];
   historyCache.channel.set(key, { time: now, data: result });
   return result;
 }
 
-// Save message while managing per-channel memory and summaries
 async function saveUserMessage(msg) {
   const db = await connect();
   // Insert the new message
@@ -132,11 +131,7 @@ async function geminiFlash(prompt, opts) {
   return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
 }
 
-client.once("ready", () => {
-  console.log(`Logged in as ${client.user.tag}!`);
-});
-
-// ------------- CONTRADICTION/MISINFO DETECTION ---------------
+// ----------------- CONTRADICTION/MISINFO DETECTION -----------------
 async function detectContradictionOrMisinformation(msg) {
   const db = await connect();
   // 1. Check if user has history in this channel (last 10 messages)
@@ -146,7 +141,7 @@ async function detectContradictionOrMisinformation(msg) {
     .limit(10)
     .toArray();
 
-  // 2. Check contradiction with previous user messages (Gemini determines this)
+  // 2. Contradiction with user's own history
   let contradiction = null;
   if (userMessages.length > 0) {
     const concatenated = userMessages.map(m => `${m.content}`).reverse().join("\n");
@@ -175,7 +170,7 @@ ${msg.content}
     }
   }
 
-  // 3. Misinformation check (web fact check, only if no contradiction)
+  // 3. Misinformation check, only if no contradiction
   let misinformation = null;
   if (!contradiction) {
     const exaResults = await exaWebSearch(msg.content, 5);
@@ -218,23 +213,37 @@ ${context}
   return { contradiction, misinformation };
 }
 
-// ===================== MAIN BOT LOGIC ==========================
+// ===================== MAIN BOT HANDLER ==========================
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // Store message in DB (with pruning/summarization for scalable memory)
+  // Store message in DB (scalable with summaries)
   try {
     await saveUserMessage(msg);
   } catch (e) {
     console.warn("DB store/prune error:", e);
   }
 
-  // Detect if this message is a direct mention, a reply (to bot), or contains blatant contradiction/misinformation
+  // Respond if: (1) mentioned, (2) replied directly to a bot message,
+  // or (3) detected contradiction/misinformation (handled later)
   const isMentioned = msg.mentions.has(client.user);
-  const isReplyToBot = (msg.reference && msg.reference.messageId);
 
-  // Always check for contradiction or misinformation in background
+  // ONLY respond to reply if it's a reply to the bot
+  let isReplyToBot = false;
+  if (msg.reference && msg.reference.messageId) {
+    try {
+      const repliedToMsg = await msg.channel.messages.fetch(msg.reference.messageId);
+      if (repliedToMsg.author.id === client.user.id) {
+        isReplyToBot = true;
+      }
+    } catch (e) {
+      isReplyToBot = false;
+      console.warn("Failed to fetch replied-to message:", e);
+    }
+  }
+
+  // -- Contradiction/Misinfo detector in the background --
   (async () => {
     let detection = null;
     try {
@@ -243,7 +252,7 @@ client.on("messageCreate", async (msg) => {
       console.warn("Detection failure:", e);
     }
 
-    // --- Surface only if contradiction or MISINFO detected ---
+    // Respond only if contradiction (by same user) or blatant misinfo is found
     if (detection) {
       if (detection.contradiction) {
         try {
@@ -266,7 +275,7 @@ client.on("messageCreate", async (msg) => {
     }
   })();
 
-  // ---------------- USER-FACING REPLY PATH ----------------------
+  // -- ONLY reply conversationally if mentioned or replied to (just bot) --
   if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
