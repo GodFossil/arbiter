@@ -1,83 +1,42 @@
-const { Cache } = require('./db');
-const logger = require('./logger');
+/**
+ * Simple in-memory + optional Redis cache wrapper.
+ * Falls back to in-memory if Redis env vars not provided.
+ */
+const NodeCache = require('node-cache');
+const redis = require('redis');
 
 class CacheManager {
-    constructor() {
-        this.memory = new Map(); // Still use memory cache for speed
+  constructor() {
+    this.mem = new NodeCache({ stdTTL: 600 }); // 10 min default
+    this.redis = null;
+    if (process.env.REDIS_URL) {
+      this.redis = redis.createClient({ url: process.env.REDIS_URL });
+      this.redis.on('error', () => {}); // suppress if Redis missing
+      this.redis.connect().catch(() => {});
     }
+  }
 
-    async get(key) {
-        try {
-            // Check memory first
-            const memoryItem = this.memory.get(key);
-            if (memoryItem && Date.now() < memoryItem.expires) {
-                return memoryItem.value;
-            }
-
-            // Check MongoDB
-            const cache = await Cache.findOne({ key, expires: { $gt: new Date() } });
-            if (cache) {
-                // Update memory cache
-                this.memory.set(key, {
-                    value: cache.value,
-                    expires: cache.expires.getTime()
-                });
-                return cache.value;
-            }
-
-            return null;
-        } catch (error) {
-            logger.error('Cache get error:', error);
-            return null;
-        }
+  async get(key) {
+    if (this.redis) {
+      const val = await this.redis.get(key);
+      return val ? JSON.parse(val) : undefined;
     }
+    return this.mem.get(key);
+  }
 
-    async set(key, value, ttlMinutes = 60) {
-        try {
-            const expires = new Date(Date.now() + ttlMinutes * 60 * 1000);
-            
-            // Update memory cache
-            this.memory.set(key, {
-                value,
-                expires: expires.getTime()
-            });
-
-            // Update MongoDB
-            await Cache.findOneAndUpdate(
-                { key },
-                { value, expires },
-                { upsert: true }
-            );
-        } catch (error) {
-            logger.error('Cache set error:', error);
-        }
+  async set(key, value, ttl = 600) {
+    if (this.redis) {
+      return this.redis.setEx(key, ttl, JSON.stringify(value));
     }
+    this.mem.set(key, value, ttl);
+  }
 
-    async has(key) {
-        return (await this.get(key)) !== null;
+  async del(key) {
+    if (this.redis) {
+      return this.redis.del(key);
     }
-
-    async delete(key) {
-        try {
-            this.memory.delete(key);
-            await Cache.deleteOne({ key });
-        } catch (error) {
-            logger.error('Cache delete error:', error);
-        }
-    }
-
-    async clear() {
-        try {
-            this.memory.clear();
-            await Cache.deleteMany({});
-        } catch (error) {
-            logger.error('Cache clear error:', error);
-        }
-    }
-
-    size() {
-        return this.memory.size;
-    }
+    this.mem.del(key);
+  }
 }
 
 module.exports = new CacheManager();
