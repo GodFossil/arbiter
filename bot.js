@@ -2,9 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connect } = require("./mongo");
-const {
-  geminiFlashFactCheck
-} = require("./gemini");
+const { geminiProFactCheck } = require("./gemini");
 const { exaWebSearch, exaNewsSearch } = require("./exa");
 
 // Print loaded environment variables for debugging
@@ -76,17 +74,15 @@ async function handleFactChecking(msg) {
       .join("\n\n");
   }
   if (!context) return;
-  let flashResult;
+  let proResult;
   try {
-    flashResult = await geminiFlashFactCheck(msg.content, context);
-    console.log("Gemini Flash fact check:", flashResult);
+    proResult = await geminiProFactCheck(msg.content, context);
+    console.log("Gemini Pro fact check:", proResult);
   } catch (e) {
-    console.error("Gemini Flash error:", e);
+    console.error("Gemini Pro error (factcheck/background):", e);
     return;
   }
-  if (!flashResult.flag || flashResult.confidence < 0.7) return;
-  // No Pro escalation – just use the flashResult
-  let finalCheck = flashResult;
+  if (!proResult.flag || proResult.confidence < 0.7) return;
   // Store in DB, optionally notify mods/channel
   try {
     const db = await connect();
@@ -95,17 +91,17 @@ async function handleFactChecking(msg) {
       user: msg.author.id,
       content: msg.content,
       exaResults,
-      factCheck: finalCheck,
+      factCheck: proResult,
       checkedAt: new Date(),
     });
   } catch (e) {
     console.error("DB error (fact_checks):", e);
   }
   try {
-    if (finalCheck.confidence > 0.85) {
+    if (proResult.confidence > 0.85) {
       await msg.reply(
-        `⚠️ Possible misinformation or logical problem detected (${finalCheck.type || 'unspecified'}):\n` +
-        `> ${finalCheck.reason}\n_Context: (automated check, may be imperfect)_`
+        `⚠️ Possible misinformation or logical problem detected (${proResult.type || 'unspecified'}):\n` +
+        `> ${proResult.reason}\n_Context: (automated check, may be imperfect)_`
       );
     }
   } catch (e) {
@@ -177,11 +173,11 @@ client.on("messageCreate", async (msg) => {
         `[user history]\n${userHistory}\n[channel context]\n${channelHistory}\n${newsSection ? `[news]\n${newsSection}` : ""}\n` +
         `[user message]\n"${msg.content}"\n[reply]`;
 
-      // Only Flash (no Pro)
+      // Only geminiProFactCheck
       let result;
       try {
-        result = await geminiFlashFactCheck(prompt, "", "response");
-        console.log("Gemini Flash response (user):", result);
+        result = await geminiProFactCheck(prompt, "", "response");
+        console.log("Gemini Pro response (user):", result);
       } catch (gemErr) {
         console.error("Gemini API failure (user-facing):", gemErr);
         throw gemErr;
