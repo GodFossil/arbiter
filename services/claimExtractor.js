@@ -1,24 +1,79 @@
-import { generate, MODELS } from './geminiClient.js';
-export default async function extractClaims(rawText = '') {
- if (!rawText.trim()) return [];
- const prompt = `
-You are a claim extraction micro-service.
-Return a JSON array where each element is a short factual claim
-(≤200 chars) found in the supplied text.
-Do NOT add any extra keys.
-TEXT:
-"""${rawText.slice(0, 6_000)}"""
-`;
- const answer = await generate({
- model: MODELS.BACKGROUND,
- messages: [{ role: 'user', content: prompt }],
- maxTokens: 256,
- temperature: 0
- });
- try {
- const claims = JSON.parse(answer);
- return Array.isArray(claims) ? claims : [];
- } catch {
- return [];
- }
+const axios = require('axios');
+const logger = require('./logger');
+
+class ClaimExtractor {
+    constructor() {
+        this.apiKey = process.env.GEMINI_API_KEY;
+        this.model = 'gemini-2.5-flash-lite';
+        this.apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
+    }
+
+    async extractClaims(text) {
+        try {
+            const prompt = `Extract all factual claims from the following text. Return a JSON array of objects, each with "claim" and "confidence" (0-1) fields. Be precise and specific.
+
+Text: "${text}"
+
+Respond with only the JSON array, no additional text.`;
+
+            const response = await axios.post(`${this.apiUrl}?key=${this.apiKey}`, {
+                contents: [{
+                    parts: [{
+                        text: prompt
+                    }]
+                }],
+                generationConfig: {
+                    temperature: 0.1,
+                    topK: 1,
+                    topP: 0.1,
+                    maxOutputTokens: 2048
+                }
+            });
+
+            const content = response.data.candidates[0].content.parts[0].text;
+            const claims = JSON.parse(content);
+            
+            logger.info(`Extracted ${claims.length} claims from text`);
+            return claims;
+        } catch (error) {
+            logger.error('Error extracting claims:', error);
+            return [{
+                claim: text,
+                confidence: 0.5
+            }];
+        }
+    }
+
+    async extractWithContext(message, context) {
+        try {
+            const prompt = `Given the following message and its context, extract the factual claims that need verification. Consider the context to avoid extracting obvious jokes or rhetorical questions.
+
+Message: "${message}"
+Context: ${context}
+
+Return a JSON array of objects with "claim" and "confidence" (0-1) fields.`;
+
+            const response = await axios.post(`${this.apiUrl}?key=${this.apiKey}`, {
+                contents: [{
+                    parts: [{
+                        text: prompt
+                    }]
+                }],
+                generationConfig: {
+                    temperature: 0.1,
+                    topK: 1,
+                    topP: 0.1,
+                    maxOutputTokens: 2048
+                }
+            });
+
+            const content = response.data.candidates[0].content.parts[0].text;
+            return JSON.parse(content);
+        } catch (error) {
+            logger.error('Error extracting claims with context:', error);
+            return this.extractClaims(message);
+        }
+    }
 }
+
+module.exports = new ClaimExtractor();
