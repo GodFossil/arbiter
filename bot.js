@@ -26,8 +26,8 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
 // ---- TUNEABLE PARAMETERS ----
 const historyCache = { user: new Map(), channel: new Map() };
 const HISTORY_TTL_MS = 4000;
-const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
-const SUMMARY_BLOCK_SIZE = 20;
+const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 50;
+const SUMMARY_BLOCK_SIZE = 10;
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -300,14 +300,15 @@ client.on("messageCreate", async (msg) => {
 
   const isMentioned = msg.mentions.has(client.user);
   let isReplyToBot = false;
+  let repliedToMsg = null;
   if (msg.reference && msg.reference.messageId) {
     try {
-      const repliedToMsg = await msg.channel.messages.fetch(msg.reference.messageId);
+      repliedToMsg = await msg.channel.messages.fetch(msg.reference.messageId);
       if (repliedToMsg.author.id === client.user.id) {
         isReplyToBot = true;
       }
     } catch (e) {
-      isReplyToBot = false;
+      repliedToMsg = null;
       console.warn("Failed to fetch replied-to message:", e);
     }
   }
@@ -397,15 +398,25 @@ client.on("messageCreate", async (msg) => {
         newsSection = `News search failed: \`${e.message}\``;
       }
 
+      // If this is a reply to a message (user or bot), treat it as the subject
+      let referencedSection = "";
+      if (repliedToMsg) {
+        referencedSection =
+          `[referenced message]\nFrom: ${
+            repliedToMsg.member ? repliedToMsg.member.displayName : repliedToMsg.author.username
+          } (${repliedToMsg.author.username})\n${repliedToMsg.content}\n`;
+      }
+
       const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 Today is ${dateString}.
-Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if they help. If [news] is present, focus on those results.
+Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if they help. If [news] is present, focus on those results.${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's question.` : ""}
 [user history]
 ${userHistory}
 [channel context]
 ${channelHistory}
 ${newsSection ? `[news]\n${newsSection}` : ""}
+${referencedSection}
 [user message]
 "${msg.content}"
 [reply]
