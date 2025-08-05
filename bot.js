@@ -29,35 +29,42 @@ const HISTORY_TTL_MS = 4000; // Cache interval
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 50; // Limit for full messages
 const SUMMARY_BLOCK_SIZE = 10; // How many messages to summarize at a time
 
-async function fetchUserHistory(userId, channelId, limit = 5) {
-  const key = `${userId}:${channelId}:${limit}`;
+// Do NOT include current message in user/channel context
+async function fetchUserHistory(userId, channelId, limit = 5, excludeMsgId = null) {
+  const key = `${userId}:${channelId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
   const cached = historyCache.user.get(key);
   if (cached && (now - cached.time < HISTORY_TTL_MS)) {
     return cached.data;
   }
   const db = await connect();
+  const query = { type: "message", user: userId, channel: channelId };
+  if (excludeMsgId) query._id = { $ne: excludeMsgId };
   const data = await db.collection("messages")
-    .find({ type: "message", user: userId, channel: channelId })
+    .find(query)
     .sort({ ts: -1 })
     .limit(limit)
     .toArray();
   historyCache.user.set(key, { time: now, data });
   return data;
 }
-
-async function fetchChannelHistory(channelId, limit = 7) {
-  const key = `${channelId}:${limit}`;
+async function fetchChannelHistory(channelId, limit = 7, excludeMsgId = null) {
+  const key = `${channelId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
   const cached = historyCache.channel.get(key);
   if (cached && (now - cached.time < HISTORY_TTL_MS)) {
     return cached.data;
   }
   const db = await connect();
-  // Fetch both recent full messages and recent summaries
+  // Fetch both recent full messages and recent summaries (optionally excludeMsgId)
   const [full, summaries] = await Promise.all([
     db.collection("messages")
-      .find({ type: "message", channel: channelId, content: { $exists: true } })
+      .find({
+        type: "message",
+        channel: channelId,
+        content: { $exists: true },
+        ...(excludeMsgId && { _id: { $ne: excludeMsgId } })
+      })
       .sort({ ts: -1 })
       .limit(limit)
       .toArray(),
@@ -67,7 +74,6 @@ async function fetchChannelHistory(channelId, limit = 7) {
       .limit(3)
       .toArray()
   ]);
-  // Merge summaries then messages (chronologically)
   const result = [...summaries.reverse(), ...full.reverse()];
   historyCache.channel.set(key, { time: now, data: result });
   return result;
@@ -75,8 +81,7 @@ async function fetchChannelHistory(channelId, limit = 7) {
 
 async function saveUserMessage(msg) {
   const db = await connect();
-  // Insert the new message
-  await db.collection("messages").insertOne({
+  const res = await db.collection("messages").insertOne({
     type: "message",
     user: msg.author.id,
     username: msg.author.username,
@@ -84,8 +89,7 @@ async function saveUserMessage(msg) {
     content: msg.content,
     ts: new Date(),
   });
-
-  // Prune if over limit (preserve only newest N)
+  // Prune if over channel memory cap
   const count = await db.collection("messages").countDocuments({
     type: "message", channel: msg.channel.id
   });
@@ -118,14 +122,13 @@ Summary:
         summary,
         ts: new Date()
       });
-      // Remove the summarized block
       await db.collection("messages").deleteMany({
         _id: { $in: toSummarize.map(m => m._id) }
       });
     }
   }
+  return res.insertedId; // Return inserted message id for exclusion
 }
-
 /** Utility for cheap LLM */
 async function geminiFlash(prompt, opts) {
   return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
@@ -213,23 +216,25 @@ ${context}
   return { contradiction, misinformation };
 }
 
+client.once("ready", () => {
+  console.log(`Logged in as ${client.user.tag}!`);
+});
+
 // ===================== MAIN BOT HANDLER ==========================
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // Store message in DB (scalable with summaries)
+  // Save user message, get current message's DB ID
+  let thisMsgId = null;
   try {
-    await saveUserMessage(msg);
+    thisMsgId = await saveUserMessage(msg);
   } catch (e) {
     console.warn("DB store/prune error:", e);
   }
 
-  // Respond if: (1) mentioned, (2) replied directly to a bot message,
-  // or (3) detected contradiction/misinformation (handled later)
+  // Precise @mention and "reply to bot" check (async fetch)
   const isMentioned = msg.mentions.has(client.user);
-
-  // ONLY respond to reply if it's a reply to the bot
   let isReplyToBot = false;
   if (msg.reference && msg.reference.messageId) {
     try {
@@ -243,7 +248,7 @@ client.on("messageCreate", async (msg) => {
     }
   }
 
-  // -- Contradiction/Misinfo detector in the background --
+  // -- Contradiction/Misinfo detection (background) --
   (async () => {
     let detection = null;
     try {
@@ -251,8 +256,6 @@ client.on("messageCreate", async (msg) => {
     } catch (e) {
       console.warn("Detection failure:", e);
     }
-
-    // Respond only if contradiction (by same user) or blatant misinfo is found
     if (detection) {
       if (detection.contradiction) {
         try {
@@ -275,21 +278,22 @@ client.on("messageCreate", async (msg) => {
     }
   })();
 
-  // -- ONLY reply conversationally if mentioned or replied to (just bot) --
+  // -- USER-FACING: Only respond to mentions/replies to bot --
   if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
 
       let userHistoryArr = null, channelHistoryArr = null, userHistory = "", channelHistory = "";
       try {
-        userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, 5);
+        // Fetch history, EXCLUDE the just-sent message
+        userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, 5, thisMsgId);
       } catch (e) {
         userHistoryArr = null;
         try { await msg.reply(`Could not fetch your recent message history: \`${e.message}\``); } catch {}
         console.warn("Fetch user history failed:", e);
       }
       try {
-        channelHistoryArr = await fetchChannelHistory(msg.channel.id, 7);
+        channelHistoryArr = await fetchChannelHistory(msg.channel.id, 7, thisMsgId);
       } catch (e) {
         channelHistoryArr = null;
         try { await msg.reply(`Could not fetch channel message history: \`${e.message}\``); } catch {}
