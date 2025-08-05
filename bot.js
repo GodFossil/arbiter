@@ -3,10 +3,7 @@ const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connect } = require("./mongo");
 const {
-  geminiFlashFactCheck,
-  geminiProFactCheck,
-  shouldUseGeminiPro,
-  incrementGeminiProUsage,
+  geminiFlashFactCheck
 } = require("./gemini");
 const { exaWebSearch, exaNewsSearch } = require("./exa");
 
@@ -15,8 +12,6 @@ console.log("ENV:", {
   DISCORD_TOKEN: !!process.env.DISCORD_TOKEN,
   GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
   GEMINI_API_URL: process.env.GEMINI_API_URL,
-  GEMINI_PRO_API_URL: process.env.GEMINI_PRO_API_URL,
-  GEMINI_PRO_QUOTA: process.env.GEMINI_PRO_QUOTA,
   EXA_API_KEY: !!process.env.EXA_API_KEY,
   EXA_API_URL: process.env.EXA_API_URL,
   MONGODB_URI: process.env.MONGODB_URI,
@@ -90,23 +85,8 @@ async function handleFactChecking(msg) {
     return;
   }
   if (!flashResult.flag || flashResult.confidence < 0.7) return;
+  // No Pro escalation – just use the flashResult
   let finalCheck = flashResult;
-  if (shouldUseGeminiPro()) {
-    try {
-      const proResult = await geminiProFactCheck(msg.content, context, flashResult.type);
-      console.log("Gemini Pro escalated check:", proResult);
-      incrementGeminiProUsage();
-      if (proResult.flag && proResult.confidence > 0.85) {
-        finalCheck = proResult;
-      } else {
-        // Pro did not confirm, abort
-        return;
-      }
-    } catch (e) {
-      console.error("Gemini Pro error:", e);
-      return;
-    }
-  }
   // Store in DB, optionally notify mods/channel
   try {
     const db = await connect();
@@ -197,17 +177,11 @@ client.on("messageCreate", async (msg) => {
         `[user history]\n${userHistory}\n[channel context]\n${channelHistory}\n${newsSection ? `[news]\n${newsSection}` : ""}\n` +
         `[user message]\n"${msg.content}"\n[reply]`;
 
-      // Pro for user, fallback to Flash if out of quota
+      // Only Flash (no Pro)
       let result;
       try {
-        if (shouldUseGeminiPro()) {
-          result = await geminiProFactCheck(prompt, "", "response");
-          incrementGeminiProUsage();
-          console.log("Gemini Pro response (user):", result);
-        } else {
-          result = await geminiFlashFactCheck(prompt, "", "response");
-          console.log("Gemini Flash response (user):", result);
-        }
+        result = await geminiFlashFactCheck(prompt, "", "response");
+        console.log("Gemini Flash response (user):", result);
       } catch (gemErr) {
         console.error("Gemini API failure (user-facing):", gemErr);
         throw gemErr;
@@ -221,7 +195,6 @@ client.on("messageCreate", async (msg) => {
         console.error("Gemini API returned unusable/empty reply:", result);
         replyContent = "Sorry, I couldn't generate a reply just now.";
       }
-
       await msg.reply(replyContent);
 
       // Store bot response as context for future
