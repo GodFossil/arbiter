@@ -1,75 +1,78 @@
-const fs = require('fs').promises;
-const path = require('path');
+const { Cache } = require('./db');
 const logger = require('./logger');
 
 class CacheManager {
-    constructor(cacheDir = './cache') {
-        this.cacheDir = cacheDir;
-        this.memory = new Map();
-        this.init();
+    constructor() {
+        this.memory = new Map(); // Still use memory cache for speed
     }
 
-    async init() {
+    async get(key) {
         try {
-            await fs.mkdir(this.cacheDir, { recursive: true });
-            await this.loadMemory();
-        } catch (error) {
-            logger.error('Failed to initialize cache:', error);
-        }
-    }
-
-    async loadMemory() {
-        try {
-            const memoryPath = path.join(this.cacheDir, 'memory.json');
-            const data = await fs.readFile(memoryPath, 'utf8');
-            const parsed = JSON.parse(data);
-            this.memory = new Map(Object.entries(parsed));
-        } catch (error) {
-            if (error.code !== 'ENOENT') {
-                logger.error('Failed to load memory:', error);
+            // Check memory first
+            const memoryItem = this.memory.get(key);
+            if (memoryItem && Date.now() < memoryItem.expires) {
+                return memoryItem.value;
             }
-        }
-    }
 
-    async saveMemory() {
-        try {
-            const memoryPath = path.join(this.cacheDir, 'memory.json');
-            const data = Object.fromEntries(this.memory);
-            await fs.writeFile(memoryPath, JSON.stringify(data, null, 2));
+            // Check MongoDB
+            const cache = await Cache.findOne({ key, expires: { $gt: new Date() } });
+            if (cache) {
+                // Update memory cache
+                this.memory.set(key, {
+                    value: cache.value,
+                    expires: cache.expires.getTime()
+                });
+                return cache.value;
+            }
+
+            return null;
         } catch (error) {
-            logger.error('Failed to save memory:', error);
+            logger.error('Cache get error:', error);
+            return null;
         }
     }
 
-    get(key) {
-        const item = this.memory.get(key);
-        if (item && Date.now() < item.expires) {
-            return item.value;
+    async set(key, value, ttlMinutes = 60) {
+        try {
+            const expires = new Date(Date.now() + ttlMinutes * 60 * 1000);
+            
+            // Update memory cache
+            this.memory.set(key, {
+                value,
+                expires: expires.getTime()
+            });
+
+            // Update MongoDB
+            await Cache.findOneAndUpdate(
+                { key },
+                { value, expires },
+                { upsert: true }
+            );
+        } catch (error) {
+            logger.error('Cache set error:', error);
         }
-        return null;
     }
 
-    set(key, value, ttlMinutes = 60) {
-        this.memory.set(key, {
-            value,
-            expires: Date.now() + (ttlMinutes * 60 * 1000)
-        });
-        this.saveMemory();
+    async has(key) {
+        return (await this.get(key)) !== null;
     }
 
-    has(key) {
-        return this.get(key) !== null;
+    async delete(key) {
+        try {
+            this.memory.delete(key);
+            await Cache.deleteOne({ key });
+        } catch (error) {
+            logger.error('Cache delete error:', error);
+        }
     }
 
-    delete(key) {
-        const deleted = this.memory.delete(key);
-        if (deleted) this.saveMemory();
-        return deleted;
-    }
-
-    clear() {
-        this.memory.clear();
-        this.saveMemory();
+    async clear() {
+        try {
+            this.memory.clear();
+            await Cache.deleteMany({});
+        } catch (error) {
+            logger.error('Cache clear error:', error);
+        }
     }
 
     size() {
