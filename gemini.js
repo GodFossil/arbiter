@@ -1,4 +1,4 @@
-const fetch = require('node-fetch');
+const fetch = require('node-fetch');  // node-fetch v2 syntax
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_API_URL = process.env.GEMINI_API_URL;         // 2.5-Flash endpoint
@@ -14,7 +14,6 @@ function incrementGeminiProUsage() {
   geminiProCount++;
 }
 
-// Cheap, background fact/fallacy check (Flash)
 async function geminiFlashFactCheck(msg, context, type = "factcheck") {
   const prompt = (type === "factcheck"
     ? `You're an experienced fact-checker. ONLY answer as JSON: ` +
@@ -37,7 +36,6 @@ async function geminiFlashFactCheck(msg, context, type = "factcheck") {
   } catch { return { flag: false, confidence: 0 }; }
 }
 
-// Pro check for high-confidence QA or user-facing work
 async function geminiProFactCheck(msg, context, specifiedType) {
   const prompt =
     `Act as a rigorous fact checker. ONLY answer in JSON: ` +
