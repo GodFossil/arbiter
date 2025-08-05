@@ -69,7 +69,6 @@ async function fetchChannelHistory(channelId, limit = 7) {
 
 /** Utility: Gemini Flash Lite prompt for cheap background tasks */
 async function geminiFlash(prompt, opts) {
-  // Manually call with flash-lite for lowest cost
   return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
 }
 
@@ -81,7 +80,7 @@ client.on("messageCreate", async (msg) => {
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // Store user message in DB
+  // Store user message in DB (log errors only)
   try {
     const db = await connect();
     await db.collection("messages").insertOne({
@@ -92,18 +91,15 @@ client.on("messageCreate", async (msg) => {
       ts: new Date(),
     });
   } catch (e) {
-    try {
-      await msg.reply(`Failed to save your message to the database: \`${e.message}\``); 
-    } catch {}
     console.warn("DB insert error:", e);
   }
 
-  // --- MULTI-STAGE FACT CHECK (BACKGROUND) ---
+  // --- BACKGROUND FACT CHECK (surface contradiction only) ---
   (async () => {
     let claimSummary = null, exaResults = null, finalFactCheck = null;
     let factCheckVerdict = null;
     try {
-      // --- Stage 1: Summarize the main claim ---
+      // Stage 1: Summarize claim
       let stage1Prompt = `
 Summarize the core factual claim or assertion (if any) in the following user message. 
 - Quote or paraphrase only the main claim, in 1 line.
@@ -118,18 +114,14 @@ User message:
           const line = stage1resp.result.replace(/^[\s"`]+|[\s"`]+$/g, "");
           claimSummary = line && line.toUpperCase() !== "NO CLAIM" ? line : null;
         }
-      } catch (e) {
-        claimSummary = null;
-      }
+      } catch (e) {}
 
-      // --- Stage 2: Exa Search on the main claim (if found), otherwise fallback to original message ---
+      // Stage 2: Exa search
       let searchQuery = claimSummary || msg.content;
       exaResults = [];
       try {
         exaResults = await exaWebSearch(searchQuery, 5);
-      } catch (e) {
-        exaResults = [];
-      }
+      } catch (e) {}
 
       let context = '';
       if (exaResults && exaResults.length > 0) {
@@ -141,21 +133,15 @@ User message:
         context = '';
       }
 
-      // --- Robust ambiguous handling (force "inconclusive" verdict if Exa results missing/empty/irrelevant) --
+      // Stage 3: Fact Check (show to user ONLY if contradiction)
+      // If context is missing, just log, don't reply
       if (!context || exaResults.length === 0) {
         factCheckVerdict = {
           verdict: "inconclusive",
           explanation: "Insufficient or no relevant web context was found to fact-check this claim.",
           evidence: ""
         };
-        try {
-          await msg.reply(
-            `⚠️ **Fact-check inconclusive:**\n` +
-            `**Reason:** Insufficient or no relevant web context was found.`
-          );
-        } catch {}
       } else if (claimSummary) {
-        // --- Stage 3: Fact check verdict ---
         const factCheckPrompt = `
 You are an expert, careful, and precise fact-checking assistant.
 
@@ -178,7 +164,6 @@ ${context}
         try {
           finalFactCheck = await geminiFlash(factCheckPrompt);
 
-          // Parse JSON (even if Gemini adds formatting)
           let parsed = null;
           try {
             const jsonMatch = finalFactCheck.result.match(/\{[\s\S]*?\}/);
@@ -199,7 +184,7 @@ ${context}
             factCheckVerdict = parsed;
           }
 
-          // Surface only "yes" or "inconclusive"
+          // **Only reply if contradiction**
           if (factCheckVerdict.verdict === "yes") {
             try {
               await msg.reply(
@@ -209,60 +194,50 @@ ${context}
                 `**Explanation:** ${factCheckVerdict.explanation}`
               );
             } catch {}
-          } else if (factCheckVerdict.verdict === "inconclusive") {
-            try {
-              await msg.reply(
-                `⚠️ **Fact-check inconclusive:**\n` +
-                `**Claim:** ${claimSummary}\n` +
-                `**Explanation:** ${factCheckVerdict.explanation}`
-              );
-            } catch {}
           }
 
         } catch (e) {
-          factCheckVerdict = {
-            verdict: "inconclusive",
-            explanation: "Fact checker LLM call failed: " + (e?.message || e),
-            evidence: ""
-          };
-          try {
-            await msg.reply(`Fact-checking failed: \`${e.message}\``);
-          } catch {}
+          // Quietly log
           console.warn("Fact-checker error:", e);
         }
       }
-      // Save all fact checks in DB
-      const db = await connect();
-      await db.collection("fact_checks").insertOne({
-        msgId: msg.id,
-        user: msg.author.id,
-        content: msg.content,
-        claimSummary,
-        exaQuery: searchQuery,
-        exaResults,
-        geminiPrompt: context ? factCheckVerdict?.geminiPrompt : null,
-        geminiResult: finalFactCheck?.result || "",
-        geminiVerdict: factCheckVerdict?.verdict || null,
-        geminiExplanation: factCheckVerdict?.explanation || null,
-        geminiEvidence: factCheckVerdict?.evidence || null,
-        checkedAt: new Date()
-      });
+      // Always store all fact checks in DB
+      try {
+        const db = await connect();
+        await db.collection("fact_checks").insertOne({
+          msgId: msg.id,
+          user: msg.author.id,
+          content: msg.content,
+          claimSummary,
+          exaQuery: searchQuery,
+          exaResults,
+          geminiPrompt: context ? factCheckVerdict?.geminiPrompt : null,
+          geminiResult: finalFactCheck?.result || "",
+          geminiVerdict: factCheckVerdict?.verdict || null,
+          geminiExplanation: factCheckVerdict?.explanation || null,
+          geminiEvidence: factCheckVerdict?.evidence || null,
+          checkedAt: new Date()
+        });
+      } catch(e) {
+        console.warn("DB save (fact_checks) error:", e);
+      }
     } catch (e) {
-      try { await msg.reply(`Error during background info retrieval: \`${e.message}\``); } catch {}
       console.warn("Multi-stage fact-check error:", e);
     }
 
-    // Summarization (unchanged)
+    // Summarization (silently log errors)
     try {
       await geminiFlash(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
     } catch (e) {
-      try { await msg.reply(`Summarization failed: \`${e.message}\``); } catch {}
       console.warn("Summarization error:", e);
     }
   })();
 
-  // --- USER-FACING: SMART, CONTEXTUAL, BOT-AWARE ---
-  if (msg.mentions.has(client.user)) {
+  // --- USER-FACING: ONLY WHEN MENTIONED, REPLIED TO, OR (above) misinfo detected ---
+  if (
+    msg.mentions.has(client.user) ||
+    (msg.reference && msg.reference.messageId) // check for reply
+  ) {
     try {
       await msg.channel.sendTyping();
 
@@ -282,7 +257,6 @@ ${context}
         try { await msg.reply(`Could not fetch channel message history: \`${e.message}\``); } catch {}
         console.warn("Fetch channel history failed:", e);
       }
-      // If either failed, do NOT send the Gemini prompt.
       if (!userHistoryArr || !channelHistoryArr) {
         try {
           await msg.reply("Not enough message history available for a quality reply. Please try again in a moment.");
@@ -336,7 +310,6 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
 [reply]
 `;
 
-      // Generate Gemini response
       let replyText;
       try {
         const { result } = await geminiUserFacing(prompt);
@@ -362,7 +335,6 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
           ts: new Date()
         });
       } catch (e) {
-        try { await msg.reply(`Failed to save my reply message: \`${e.message}\``); } catch {}
         console.warn("DB insert error (bot reply):", e);
       }
     } catch (err) {
