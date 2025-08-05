@@ -1,100 +1,36 @@
 const axios = require('axios');
 const logger = require('./logger');
 
-class ConfidenceScorer {
-    constructor() {
-        this.apiKey = process.env.GEMINI_API_KEY;
-        this.model = 'gemini-2.5-flash-lite';
-        this.apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
-    }
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
 
-    async calculateScore(claim, sources) {
-        try {
-            const sourcesText = sources.map((source, index) => 
-                `Source ${index + 1}: ${source.title}\n${source.snippet}\nRelevance: ${source.relevance}`
-            ).join('\n\n');
+/**
+ * Produce a 0-1 confidence score based on sources & reasoning.
+ * Uses gemini-2.5-flash-lite.
+ */
+async function scoreConfidence(claim, sources) {
+  const prompt = `
+You are a fact-check confidence scorer. Rate how well the provided sources support the claim.
 
-            const prompt = `Analyze the following claim and sources to determine a confidence score.
-
-Claim: "${claim}"
+Claim: ${claim}
 
 Sources:
-${sourcesText}
+${sources.map((s, i) => `${i + 1}. ${s.snippet || s.description}`).join('\n')}
 
-Consider:
-1. Source reliability and authority
-2. Consistency across sources
-3. Evidence quality
-4. Recency of information
+Return a single float between 0 and 1, with 1 meaning fully verified. Reply with only the number.
+`;
 
-Return a JSON object with:
-{
-    "score": 0-100,
-    "reasoning": "brief explanation",
-    "reliability": "high|medium|low",
-    "flag": "none|disputed|outdated|unverified"
-}`;
-
-            const response = await axios.post(`${this.apiUrl}?key=${this.apiKey}`, {
-                contents: [{
-                    parts: [{
-                        text: prompt
-                    }]
-                }],
-                generationConfig: {
-                    temperature: 0.1,
-                    topK: 1,
-                    topP: 0.1,
-                    maxOutputTokens: 1024
-                }
-            });
-
-            const content = response.data.candidates[0].content.parts[0].text;
-            const result = JSON.parse(content);
-            
-            logger.info(`Calculated confidence score: ${result.score} for claim: ${claim.substring(0, 50)}...`);
-            return result;
-        } catch (error) {
-            logger.error('Error calculating confidence score:', error);
-            return {
-                score: 50,
-                reasoning: 'Error in analysis',
-                reliability: 'medium',
-                flag: 'unverified'
-            };
-        }
-    }
-
-    async adjustScore(current, newInfo) {
-        try {
-            const prompt = `Adjust the confidence score based on new information.
-
-Current score: ${current}
-New information: ${newInfo}
-
-Return only the new score (0-100) as a number.`;
-
-            const response = await axios.post(`${this.apiUrl}?key=${this.apiKey}`, {
-                contents: [{
-                    parts: [{
-                        text: prompt
-                    }]
-                }],
-                generationConfig: {
-                    temperature: 0.1,
-                    topK: 1,
-                    topP: 0.1,
-                    maxOutputTokens: 10
-                }
-            });
-
-            const content = response.data.candidates[0].content.parts[0].text;
-            return parseInt(content.trim()) || current;
-        } catch (error) {
-            logger.error('Error adjusting confidence score:', error);
-            return current;
-        }
-    }
+  try {
+    const { data } = await axios.post(
+      `${GEMINI_URL}?key=${process.env.GEMINI_API_KEY}`,
+      { contents: [{ parts: [{ text: prompt }] }] },
+      { timeout: 10000 }
+    );
+    const num = parseFloat(data.candidates?.[0]?.content?.parts?.[0]?.text || '0');
+    return Math.min(Math.max(num, 0), 1);
+  } catch (err) {
+    logger.error('Gemini confidenceScorer failed:', err.message);
+    return 0.5; // neutral fallback
+  }
 }
 
-module.exports = new ConfidenceScorer();
+module.exports = { scoreConfidence };
