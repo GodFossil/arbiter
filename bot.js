@@ -26,8 +26,10 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
 // ---- TUNEABLE PARAMETERS ----
 const historyCache = { user: new Map(), channel: new Map() };
 const HISTORY_TTL_MS = 4000;
-const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 50;
-const SUMMARY_BLOCK_SIZE = 10;
+const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
+const SUMMARY_BLOCK_SIZE = 20;
+// ---- Maximum length for auto-factcheck (background only) ----
+const MAX_FACTCHECK_CHARS = 500;
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -279,7 +281,6 @@ ${answer}
   return { contradiction, misinformation };
 }
 
-// ---- MAIN HANDLER ----
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
@@ -313,37 +314,43 @@ client.on("messageCreate", async (msg) => {
     }
   }
 
-  // ---- BACKGROUND DETECTION ----
-  (async () => {
-    let detection = null;
-    try {
-      detection = await detectContradictionOrMisinformation(msg);
-    } catch (e) {
-      console.warn("Detection failure:", e);
-    }
-    if (detection) {
-      if (detection.contradiction) {
-        try {
-          await msg.reply(
-            `⚡ **CONTRADICTION DETECTED** ⚡\n` +
-            `This message contradicts a prior statement you made:\n` +
-            `> ${detection.contradiction.evidence}\n` +
-            `Reason: ${detection.contradiction.reason}`
-          );
-        } catch {}
-      } else if (detection.misinformation) {
-        try {
-          await msg.reply(
-            `🚩 **MISINFORMATION DETECTED** 🚩\n` +
-            `Reason: ${detection.misinformation.reason}\n` +
-            (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}` : "")
-          );
-        } catch {}
+  // ============ BACKGROUND DETECTION =============
+  // --- EXCLUDE long messages except for direct mention/reply ---
+  if (
+    msg.content.length <= MAX_FACTCHECK_CHARS
+  ) {
+    (async () => {
+      let detection = null;
+      try {
+        detection = await detectContradictionOrMisinformation(msg);
+      } catch (e) {
+        console.warn("Detection failure:", e);
       }
-    }
-  })();
+      if (detection) {
+        if (detection.contradiction) {
+          try {
+            await msg.reply(
+              `⚡ **CONTRADICTION DETECTED** ⚡\n` +
+              `This message contradicts a prior statement you made:\n` +
+              `> ${detection.contradiction.evidence}\n` +
+              `Reason: ${detection.contradiction.reason}`
+            );
+          } catch {}
+        } else if (detection.misinformation) {
+          try {
+            await msg.reply(
+              `🚩 **MISINFORMATION DETECTED** 🚩\n` +
+              `Reason: ${detection.misinformation.reason}\n` +
+              (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}` : "")
+            );
+          } catch {}
+        }
+      }
+    })();
+  }
 
-  // ---- USER-FACING REPLIES ----
+    // ---- USER-FACING REPLIES ----
+  // --- Direct mention or reply-to-bot: always process, regardless of message length ---
   if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
@@ -398,7 +405,7 @@ client.on("messageCreate", async (msg) => {
         newsSection = `News search failed: \`${e.message}\``;
       }
 
-      // If this is a reply to a message (user or bot), treat it as the subject
+      // If this is a reply to a message (user or bot), treat it as the subject in the context
       let referencedSection = "";
       if (repliedToMsg) {
         referencedSection =
