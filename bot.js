@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connect } = require("./mongo");
@@ -25,9 +24,7 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
   : null;
 
-/**
- * Fetch last N user messages in this channel
- */
+// Fetch last N user messages in this channel
 async function fetchUserHistory(userId, channelId, limit = 5) {
   const db = await connect();
   return await db.collection("messages")
@@ -37,9 +34,7 @@ async function fetchUserHistory(userId, channelId, limit = 5) {
     .toArray();
 }
 
-/**
- * Fetch last K channel messages, including bots
- */
+// Fetch last K channel messages, including bots
 async function fetchChannelHistory(channelId, limit = 7) {
   const db = await connect();
   return await db.collection("messages")
@@ -60,8 +55,7 @@ client.on("messageCreate", async (msg) => {
   // Store all user messages in MongoDB
   try {
     const db = await connect();
-    const memory = db.collection("messages");
-    await memory.insertOne({
+    await db.collection("messages").insertOne({
       user: msg.author.id,
       username: msg.author.username,
       channel: msg.channel.id,
@@ -74,37 +68,48 @@ client.on("messageCreate", async (msg) => {
 
   // ------------ BACKGROUND TASKS ------------
   (async () => {
-    const exaResults = await exaWebSearch(msg.content, 5);
-    let context = '';
-    if (exaResults.length > 0) {
-      context = exaResults
-        .slice(0, 3)
-        .map(r => `Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
-        .join("\n\n");
-    }
-    if (context) {
-      const factCheckPrompt = `
+    try {
+      const exaResults = await exaWebSearch(msg.content, 5);
+      let context = '';
+      if (exaResults && exaResults.length > 0) {
+        context = exaResults
+          .slice(0, 3)
+          .map(r => `Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
+          .join("\n\n");
+      }
+      if (context) {
+        const factCheckPrompt = `
 Message: "${msg.content}"
 Web context:
 ${context}
 Does the message contain likely misinformation or contradiction compared to context? Respond with 'yes' or 'no' and one short sentence. Keep it brief.`;
+
+        try {
+          const { result } = await geminiBackground(factCheckPrompt);
+          const db = await connect();
+          await db.collection("fact_checks").insertOne({
+            msgId: msg.id,
+            user: msg.author.id,
+            content: msg.content,
+            exaResults,
+            geminiResult: result,
+            checkedAt: new Date()
+          });
+        } catch (e) {
+          // Fact-check API error, can log if you want
+        }
+      }
+
+      // Summarization (optional)
       try {
-        const { result } = await geminiBackground(factCheckPrompt);
-        const db = await connect();
-        await db.collection("fact_checks").insertOne({
-          msgId: msg.id,
-          user: msg.author.id,
-          content: msg.content,
-          exaResults,
-          geminiResult: result,
-          checkedAt: new Date()
-        });
-      } catch (e) { /* ignore */ }
+        await geminiBackground(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
+      } catch (e) {
+        // Summarization error, can log if you want
+      }
+    } catch (e) {
+      // Top-level exaWebSearch failure (API error, connectivity, etc)
+      console.warn("Background Exa error:", e);
     }
-    // Summarization (optional)
-    try {
-      await geminiBackground(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
-    } catch (e) { /* intentionally silent */ }
   })();
 
   // ------------ USER-FACING: SMART, CONTEXTUAL, BOT-AWARE ------------
@@ -117,11 +122,9 @@ Does the message contain likely misinformation or contradiction compared to cont
         fetchUserHistory(msg.author.id, msg.channel.id, 5),
         fetchChannelHistory(msg.channel.id, 7)
       ]);
-
       const userHistory = userHistoryArr.length
         ? userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n")
         : '';
-
       const channelHistory = channelHistoryArr.length
         ? channelHistoryArr.reverse().map(m => {
             if (m.user === msg.author.id) return `You: ${m.content}`;
@@ -140,19 +143,23 @@ Does the message contain likely misinformation or contradiction compared to cont
         let topic = "world events";
         const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
         if (match) topic = match[2];
-        const exaNews = await exaNewsSearch(topic, 3);
-        if (exaNews.length) {
-          const newsSnippets = exaNews
-            .map(r => `• ${r.title.trim()} (${r.url})\n${r.text.trim().slice(0,160)}...`)
-            .join("\n");
-          newsSection = `Here are concise, real-time news results for "${topic}":\n${newsSnippets}\n`;
-        } else {
-          newsSection = "No up-to-date news articles found for that topic.";
+        try {
+          const exaNews = await exaNewsSearch(topic, 3);
+          if (exaNews.length) {
+            const newsSnippets = exaNews
+              .map(r => `• ${r.title.trim()} (${r.url})\n${r.text.trim().slice(0,160)}...`)
+              .join("\n");
+            newsSection = `Here are concise, real-time news results for "${topic}":\n${newsSnippets}\n`;
+          } else {
+            newsSection = "No up-to-date news articles found for that topic.";
+          }
+        } catch (e) {
+          newsSection = "Unable to retrieve news results right now.";
         }
       }
 
       // Build concise prompt
-      let prompt = `Today is ${dateString}.
+      const prompt = `Today is ${dateString}.
 Reply concisely. Use recent context from user, bot, and others below if relevant. If [news] is present, focus on those results.
 [user history]\n${userHistory}
 [channel context]\n${channelHistory}
