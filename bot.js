@@ -48,12 +48,12 @@ client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
-// Main handler, now with robust surfaced error handling and improved fact check
 client.on("messageCreate", async (msg) => {
+  // Discord.js v14: ChannelType.GuildText is 0
   if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // --- STORE USER MESSAGE ---
+  // Store user message in DB
   try {
     const db = await connect();
     await db.collection("messages").insertOne({
@@ -70,9 +70,9 @@ client.on("messageCreate", async (msg) => {
     console.warn("DB insert error:", e);
   }
 
-  // --- BACKGROUND TASKS (FACT-CHECK, SUMMARIZE) ---
+  // --- BACKGROUND: FACT CHECK & SUMMARIZATION ---
   (async () => {
-    // FACT CHECK
+    // Fact check
     try {
       const exaResults = await exaWebSearch(msg.content, 5);
 
@@ -112,29 +112,38 @@ ${context}
         try {
           const { result } = await geminiBackground(factCheckPrompt);
 
-          // Try to parse JSON from result. Gemini may add preface or code block formatting, so try to extract JSON block.
+          // --- Parse Gemini output as strict JSON ---
           let parsed = null;
           try {
-            // Find the first valid JSON object in the string
-            const jsonMatch = result.match(/\{[\s\S]*\}/);
+            // Try to extract JSON, even if wrapped in Markdown/code block or with preamble
+            const jsonMatch = result.match(/\{[\s\S]*?\}/);
             if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
           } catch (err) {
-            // fallback: treat as plain text
+            parsed = null;
           }
 
-          // Optional: Reply in thread if contradiction is found
-          if (parsed?.verdict === "yes") {
-            try {
-              await msg.reply(
-                `⚠️ Possible contradiction detected:\n` +
-                `**Claim:** ${msg.content}\n` +
-                `**Contradicted by:** ${parsed.evidence}\n` +
-                `**Explanation:** ${parsed.explanation}`
-              );
-            } catch {}
+          // Only surface findings if verdict is "yes" or "inconclusive"
+          if (parsed) {
+            if (parsed.verdict === "yes") {
+              try {
+                await msg.reply(
+                  `⚠️ **Contradiction detected:**\n` +
+                  `**Claim:** ${msg.content}\n` +
+                  `**Contradicted by:** ${parsed.evidence}\n` +
+                  `**Explanation:** ${parsed.explanation}`
+                );
+              } catch {}
+            } else if (parsed.verdict === "inconclusive") {
+              try {
+                await msg.reply(
+                  `⚠️ **Fact-check inconclusive:**\n` +
+                  `**Explanation:** ${parsed.explanation}`
+                );
+              } catch {}
+            }
           }
 
-          // Save all fact checks in DB, including details
+          // Save all fact checks in DB, parse or not
           const db = await connect();
           await db.collection("fact_checks").insertOne({
             msgId: msg.id,
@@ -159,7 +168,7 @@ ${context}
       try { await msg.reply(`Error during background info retrieval: \`${e.message}\``); } catch {}
       console.warn("Background Exa error:", e);
     }
-    // SUMMARIZATION
+    // Summarization
     try {
       await geminiBackground(`Summarize: "${msg.content}"\nKeep summarization short, just main point.`);
     } catch (e) {
