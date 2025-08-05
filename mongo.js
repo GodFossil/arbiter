@@ -1,17 +1,14 @@
-// mongo.js
 const { MongoClient } = require("mongodb");
+const url = process.env.MONGODB_URI || "mongodb://localhost:27017";
+const dbName = process.env.MONGODB_DB || "arbiterdb";
 
-const uri = process.env.MONGODB_URI;
-const client = new MongoClient(uri, { maxPoolSize: 10 });
-
-let db = null;
-
+let client = null;
 async function connect() {
-  if (!db) {
+  if (!client) {
+    client = new MongoClient(url, { useUnifiedTopology: true });
     await client.connect();
-    db = client.db("arbiter-memory");
   }
-  return db;
+  return client.db(dbName);
 }
 
 module.exports = { connect };
