@@ -1,4 +1,4 @@
-const fetch = require('node-fetch');
+const fetch = require('node-fetch');  // node-fetch v2 syntax
 
 const EXA_API_KEY = process.env.EXA_API_KEY;
 const EXA_API_URL = process.env.EXA_API_URL;
