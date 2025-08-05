@@ -34,7 +34,7 @@ async function fetchUserHistory(userId, channelId, limit = 5) {
     .toArray();
 }
 
-// Fetch last K channel messages, including bots
+// Fetch last K channel messages, including bots (with "I:" labeling for bot)
 async function fetchChannelHistory(channelId, limit = 7) {
   const db = await connect();
   return await db.collection("messages")
@@ -117,7 +117,7 @@ Does the message contain likely misinformation or contradiction compared to cont
     try {
       await msg.channel.sendTyping();
 
-      // Fetch user memory, channel memory including bot
+      // Fetch user memory, channel memory including bot (with "I:" for bot)
       const [userHistoryArr, channelHistoryArr] = await Promise.all([
         fetchUserHistory(msg.author.id, msg.channel.id, 5),
         fetchChannelHistory(msg.channel.id, 7)
@@ -128,7 +128,7 @@ Does the message contain likely misinformation or contradiction compared to cont
       const channelHistory = channelHistoryArr.length
         ? channelHistoryArr.reverse().map(m => {
             if (m.user === msg.author.id) return `You: ${m.content}`;
-            if (m.user === client.user.id) return `Bot: ${m.content}`;
+            if (m.user === client.user.id) return `I: ${m.content}`;
             return (m.username || "User") + ": " + m.content;
           }).join("\n")
         : '';
@@ -158,14 +158,14 @@ Does the message contain likely misinformation or contradiction compared to cont
         }
       }
 
-      // Build concise prompt
+      // Build prompt using first person for bot messages
       const prompt = `Today is ${dateString}.
-Reply concisely. Use recent context from user, bot, and others below if relevant. If [news] is present, focus on those results.
+Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."
 [user history]\n${userHistory}
 [channel context]\n${channelHistory}
 ${newsSection ? `[news]\n${newsSection}` : ""}
 [user message]\n"${msg.content}"
-[bot reply]
+[reply]
 `;
 
       // Generate Gemini response
