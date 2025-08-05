@@ -26,7 +26,7 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   : null;
 
 /**
- * Fetches last N messages from this user in this guild for 'memory'
+ * Fetch last N user messages in this channel
  */
 async function fetchUserHistory(userId, channelId, limit = 5) {
   const db = await connect();
@@ -38,12 +38,12 @@ async function fetchUserHistory(userId, channelId, limit = 5) {
 }
 
 /**
- * Fetches last K channel messages for context (excluding bots)
+ * Fetch last K channel messages, including bots
  */
 async function fetchChannelHistory(channelId, limit = 7) {
   const db = await connect();
   return await db.collection("messages")
-    .find({ channel: channelId, content: { $exists: true }, user: { $ne: null } })
+    .find({ channel: channelId, content: { $exists: true } })
     .sort({ ts: -1 })
     .limit(limit)
     .toArray();
@@ -57,7 +57,7 @@ client.on("messageCreate", async (msg) => {
   if (msg.author.bot || msg.channel.type !== 0) return;
   if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
 
-  // Store all messages in MongoDB
+  // Store all user messages in MongoDB
   try {
     const db = await connect();
     const memory = db.collection("messages");
@@ -73,7 +73,6 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ------------ BACKGROUND TASKS ------------
-  // Fact-check/context analysis with Exa + Gemini (flash-lite)
   (async () => {
     const exaResults = await exaWebSearch(msg.content, 5);
     let context = '';
@@ -91,7 +90,6 @@ ${context}
 Does the message contain likely misinformation or contradiction compared to context? Respond with 'yes' or 'no' and one short sentence. Keep it brief.`;
       try {
         const { result } = await geminiBackground(factCheckPrompt);
-        // Save background check
         const db = await connect();
         await db.collection("fact_checks").insertOne({
           msgId: msg.id,
@@ -109,13 +107,12 @@ Does the message contain likely misinformation or contradiction compared to cont
     } catch (e) { /* intentionally silent */ }
   })();
 
-
-  // ------------ USER-FACING: SMART, CONTEXTUAL, NEWS-AWARE ------------
+  // ------------ USER-FACING: SMART, CONTEXTUAL, BOT-AWARE ------------
   if (msg.mentions.has(client.user)) {
     try {
       await msg.channel.sendTyping();
 
-      // 1. Fetch contextual memory
+      // Fetch user memory, channel memory including bot
       const [userHistoryArr, channelHistoryArr] = await Promise.all([
         fetchUserHistory(msg.author.id, msg.channel.id, 5),
         fetchChannelHistory(msg.channel.id, 7)
@@ -126,24 +123,23 @@ Does the message contain likely misinformation or contradiction compared to cont
         : '';
 
       const channelHistory = channelHistoryArr.length
-        ? channelHistoryArr.reverse().map(m =>
-            (m.user === msg.author.id ? "You" : m.username || "User") + ": " + m.content
-          ).join("\n")
+        ? channelHistoryArr.reverse().map(m => {
+            if (m.user === msg.author.id) return `You: ${m.content}`;
+            if (m.user === client.user.id) return `Bot: ${m.content}`;
+            return (m.username || "User") + ": " + m.content;
+          }).join("\n")
         : '';
 
-      // 2. Date awareness for prompt (not just system date—can be used for time-sensitive things)
-      const dateString = new Date().toLocaleDateString('en-US', {year:'numeric', month:'long', day:'numeric'});
+      // Date for prompt
+      const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
-      // 3. News intent detection (primitive, tweakable)
+      // News detection
       const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
       let newsSection = "";
       if (newsRegex.test(msg.content)) {
-        // Try to deduce news topic or default to world news
         let topic = "world events";
-        // Naively try to extract after 'about' or 'on'
         const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
         if (match) topic = match[2];
-
         const exaNews = await exaNewsSearch(topic, 3);
         if (exaNews.length) {
           const newsSnippets = exaNews
@@ -155,11 +151,9 @@ Does the message contain likely misinformation or contradiction compared to cont
         }
       }
 
-      // 4. Compose bot prompt
+      // Build concise prompt
       let prompt = `Today is ${dateString}.
-Reply concisely to the user message below. If newsSection (if shown) contains results, base your reply on that before anything else. 
-If referring to prior conversation, use the user/channel history provided. Limit response to as few words as possible.
-
+Reply concisely. Use recent context from user, bot, and others below if relevant. If [news] is present, focus on those results.
 [user history]\n${userHistory}
 [channel context]\n${channelHistory}
 ${newsSection ? `[news]\n${newsSection}` : ""}
@@ -167,13 +161,28 @@ ${newsSection ? `[news]\n${newsSection}` : ""}
 [bot reply]
 `;
 
-      // 5. Generate reply (with proper Gemini model and fallback)
+      // Generate Gemini response
       const { result } = await geminiUserFacing(prompt);
       await msg.reply(result);
 
+      // --- Store bot response in Mongo as a message for context ---
+      try {
+        const db = await connect();
+        await db.collection("messages").insertOne({
+          user: client.user.id,
+          username: client.user.username || "Arbiter",
+          channel: msg.channel.id,
+          content: result,
+          ts: new Date()
+        });
+      } catch (e) {
+        console.warn("DB insert error (bot reply):", e);
+      }
     } catch (err) {
       console.error("Gemini user-facing failed:", err);
-      await msg.reply("Can't fetch info right now.");
+      try {
+        await msg.reply("Can't fetch info right now.");
+      } catch (e) {}
     }
   }
 });
