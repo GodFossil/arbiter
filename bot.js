@@ -73,7 +73,6 @@ async function handleFactChecking(msg) {
   } catch (e) {
     console.error("Exa search error (background):", e);
   }
-
   let context = '';
   if (exaResults.length > 0) {
     context = exaResults
@@ -82,7 +81,6 @@ async function handleFactChecking(msg) {
       .join("\n\n");
   }
   if (!context) return;
-
   let flashResult;
   try {
     flashResult = await geminiFlashFactCheck(msg.content, context);
@@ -92,7 +90,6 @@ async function handleFactChecking(msg) {
     return;
   }
   if (!flashResult.flag || flashResult.confidence < 0.7) return;
-
   let finalCheck = flashResult;
   if (shouldUseGeminiPro()) {
     try {
@@ -124,7 +121,6 @@ async function handleFactChecking(msg) {
   } catch (e) {
     console.error("DB error (fact_checks):", e);
   }
-
   try {
     if (finalCheck.confidence > 0.85) {
       await msg.reply(
@@ -217,8 +213,16 @@ client.on("messageCreate", async (msg) => {
         throw gemErr;
       }
 
-      // Gemini result likely an object. If not, just reply as string
-      await msg.reply(result.reason || result);
+      // ----------- SAFEGUARD FOR EMPTY REPLIES -------------
+      let replyContent = (typeof result === 'object' && result !== null)
+        ? (result.reason || result.result || "")
+        : (result || "");
+      if (!replyContent || !replyContent.trim() || replyContent.trim() === "{}") {
+        console.error("Gemini API returned unusable/empty reply:", result);
+        replyContent = "Sorry, I couldn't generate a reply just now.";
+      }
+
+      await msg.reply(replyContent);
 
       // Store bot response as context for future
       try {
@@ -227,7 +231,7 @@ client.on("messageCreate", async (msg) => {
           user: client.user.id,
           username: client.user.username || "Arbiter",
           channel: msg.channel.id,
-          content: result.reason || result,
+          content: replyContent,
           ts: new Date(),
         });
       } catch (e) {
