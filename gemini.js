@@ -1,32 +1,33 @@
-const fetch = require('node-fetch'); // node-fetch v2 syntax
+const { GoogleGenerativeAI } = require('@google/genai');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = process.env.GEMINI_API_URL; // Should be gemini-pro endpoint
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
-async function geminiProFactCheck(msg, context, type = "factcheck") {
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+
+async function geminiFactCheck(msg, context = "", type = "factcheck") {
   const prompt = (type === "factcheck"
     ? `You're an experienced fact-checker. ONLY answer as JSON:` +
       `{"flag":true|false,"type":"(fact inaccuracy|contradiction|fallacy)","confidence":0-1,"reason":<short string>}\n` +
       `Message: """${msg}"""\nWeb context:\n${context}\n`
     : msg);
 
-  const res = await fetch(GEMINI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${GEMINI_API_KEY}`,
-    },
-    body: JSON.stringify({ prompt, model: "gemini-pro", maxTokens: 256 }),
-  });
-  const data = await res.json();
+  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
   try {
-    if (typeof data.result === "string") return JSON.parse(data.result);
-    return data;
-  } catch {
-    return { flag: false, confidence: 0 };
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    if (type === "factcheck") {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { flag: false, confidence: 0, reason: text };
+      }
+    }
+    return { reason: text };
+  } catch (err) {
+    console.error("Gemini SDK error:", err);
+    return { flag: false, confidence: 0, reason: "Error or unauthenticated." };
   }
 }
 
-module.exports = {
-  geminiProFactCheck
-};
+module.exports = { geminiFactCheck };
