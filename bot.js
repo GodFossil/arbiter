@@ -78,6 +78,7 @@ client.on("messageCreate", async (msg) => {
   // --- MULTI-STAGE FACT CHECK (BACKGROUND) ---
   (async () => {
     let claimSummary = null, exaResults = null, finalFactCheck = null;
+    let factCheckVerdict = null; // what we'll store
     try {
       // --- Stage 1: Summarize the main claim ---
       let stage1Prompt = `
@@ -114,23 +115,36 @@ User message:
           .map((r, i) => `Result #${i + 1} | Title: ${r.title}\nURL: ${r.url}\nExcerpt: ${r.text}`)
           .join("\n\n");
       } else {
-        context = '(No relevant web results found.)';
+        context = '';
       }
 
-      // --- Stage 3: Fact check verdict ---
-      if (context && claimSummary) {
+      // --- Robust ambiguous handling (force "inconclusive" verdict if Exa results missing/empty/irrelevant) --
+      // If context is missing, skip LLM, provide fixed output
+      if (!context || exaResults.length === 0) {
+        factCheckVerdict = {
+          verdict: "inconclusive",
+          explanation: "Insufficient or no relevant web context was found to fact-check this claim.",
+          evidence: ""
+        };
+        try {
+          await msg.reply(
+            `⚠️ **Fact-check inconclusive:**\n` +
+            `**Reason:** Insufficient or no relevant web context was found.`
+          );
+        } catch {}
+      } else if (claimSummary) {
+        // --- Stage 3: Fact check verdict (force "inconclusive" if context unrelated or insufficient) ---
         const factCheckPrompt = `
 You are an expert, careful, and precise fact-checking assistant.
-Your job:
-• Given a [User claim] and [Web context] (selected search results, could be 0-3).
-• If the user's claim is **directly contradicted** by any web snippet, tell which snippet(s), quote them, and specify which part of the claim is contradicted.
-• If none of the snippets clearly support or contradict the claim, answer "inconclusive" and say "Insufficient context".
 
-Give your response as strict JSON:
-{ "verdict": "yes"|"no"|"inconclusive", "explanation": "...", "evidence": "..." }
-- "verdict": "yes" if there is a clear contradiction, "no" if consistent or unaddressed, "inconclusive" if context is insufficient.
-- "evidence": Only a quote from web context if "yes", else "".
-- Always use double quotes for all field values.
+Instructions:
+• Given a [User claim] and [Web context] (search results, may be unrelated or not address the claim).
+• If the web context does NOT directly address, support, or contradict the claim, or if context is ambiguous or off-topic, respond ONLY with {"verdict":"inconclusive","explanation":"Insufficient context","evidence":""}
+• If the claim IS directly contradicted by a snippet, quote it and explain.
+• NEVER guess or assume. Err on the side of "inconclusive" if unsure.
+
+Return your answer as strict JSON ONLY:
+{"verdict":"yes"|"no"|"inconclusive","explanation":"...","evidence":"..."}
 
 [User claim]
 ${JSON.stringify(claimSummary)}
@@ -149,52 +163,69 @@ ${context}
             if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
           } catch (err) {}
 
-          // Surface only "yes" or "inconclusive"
-          if (parsed) {
-            if (parsed.verdict === "yes") {
-              try {
-                await msg.reply(
-                  `⚠️ **Contradiction detected:**\n` +
-                  `**Claim:** ${claimSummary}\n` +
-                  `**Contradicted by:** ${parsed.evidence}\n` +
-                  `**Explanation:** ${parsed.explanation}`
-                );
-              } catch {}
-            } else if (parsed.verdict === "inconclusive") {
-              try {
-                await msg.reply(
-                  `⚠️ **Fact-check inconclusive:**\n` +
-                  `**Claim:** ${claimSummary}\n` +
-                  `**Explanation:** ${parsed.explanation}`
-                );
-              } catch {}
-            }
+          // If LLM "hallucinates" or does not follow instructions, force inconclusive anyway.
+          if (
+            !parsed ||
+            !parsed.verdict ||
+            !["yes", "no", "inconclusive"].includes(parsed.verdict)
+          ) {
+            factCheckVerdict = {
+              verdict: "inconclusive",
+              explanation: "No reliable LLM verdict could be retrieved.",
+              evidence: ""
+            };
+          } else {
+            factCheckVerdict = parsed;
           }
 
-          // Store all stages and verdict in DB
-          const db = await connect();
-          await db.collection("fact_checks").insertOne({
-            msgId: msg.id,
-            user: msg.author.id,
-            content: msg.content,
-            claimSummary,
-            exaQuery: searchQuery,
-            exaResults,
-            geminiPrompt: factCheckPrompt,
-            geminiResult: finalFactCheck.result,
-            geminiVerdict: parsed?.verdict || null,
-            geminiExplanation: parsed?.explanation || null,
-            geminiEvidence: parsed?.evidence || null,
-            checkedAt: new Date()
-          });
+          // Surface only "yes" or "inconclusive"
+          if (factCheckVerdict.verdict === "yes") {
+            try {
+              await msg.reply(
+                `⚠️ **Contradiction detected:**\n` +
+                `**Claim:** ${claimSummary}\n` +
+                `**Contradicted by:** ${factCheckVerdict.evidence}\n` +
+                `**Explanation:** ${factCheckVerdict.explanation}`
+              );
+            } catch {}
+          } else if (factCheckVerdict.verdict === "inconclusive") {
+            try {
+              await msg.reply(
+                `⚠️ **Fact-check inconclusive:**\n` +
+                `**Claim:** ${claimSummary}\n` +
+                `**Explanation:** ${factCheckVerdict.explanation}`
+              );
+            } catch {}
+          }
 
         } catch (e) {
+          factCheckVerdict = {
+            verdict: "inconclusive",
+            explanation: "Fact checker LLM call failed: " + (e?.message || e),
+            evidence: ""
+          };
           try {
             await msg.reply(`Fact-checking failed: \`${e.message}\``);
           } catch {}
           console.warn("Fact-checker error:", e);
         }
       }
+      // Save all fact checks (including ambiguous forced verdicts) in DB
+      const db = await connect();
+      await db.collection("fact_checks").insertOne({
+        msgId: msg.id,
+        user: msg.author.id,
+        content: msg.content,
+        claimSummary,
+        exaQuery: searchQuery,
+        exaResults,
+        geminiPrompt: context ? factCheckVerdict?.geminiPrompt : null,
+        geminiResult: finalFactCheck?.result || "",
+        geminiVerdict: factCheckVerdict?.verdict || null,
+        geminiExplanation: factCheckVerdict?.explanation || null,
+        geminiEvidence: factCheckVerdict?.evidence || null,
+        checkedAt: new Date()
+      });
     } catch (e) {
       try { await msg.reply(`Error during background info retrieval: \`${e.message}\``); } catch {}
       console.warn("Multi-stage fact-check error:", e);
