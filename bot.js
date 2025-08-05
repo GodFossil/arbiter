@@ -10,6 +10,20 @@ const {
 } = require("./gemini");
 const { exaWebSearch, exaNewsSearch } = require("./exa");
 
+// Print loaded environment variables for debugging
+console.log("ENV:", {
+  DISCORD_TOKEN: !!process.env.DISCORD_TOKEN,
+  GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
+  GEMINI_API_URL: process.env.GEMINI_API_URL,
+  GEMINI_PRO_API_URL: process.env.GEMINI_PRO_API_URL,
+  GEMINI_PRO_QUOTA: process.env.GEMINI_PRO_QUOTA,
+  EXA_API_KEY: !!process.env.EXA_API_KEY,
+  EXA_API_URL: process.env.EXA_API_URL,
+  MONGODB_URI: process.env.MONGODB_URI,
+  MONGODB_DB: process.env.MONGODB_DB,
+  CHANNEL_ID_WHITELIST: process.env.CHANNEL_ID_WHITELIST,
+});
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter Discord bot - OK'));
@@ -28,6 +42,7 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
   : null;
 
+// ---------- History Fetch Functions ----------
 async function fetchUserHistory(userId, channelId, limit = 5) {
   const db = await connect();
   return await db.collection("messages")
@@ -36,7 +51,6 @@ async function fetchUserHistory(userId, channelId, limit = 5) {
     .limit(limit)
     .toArray();
 }
-
 async function fetchChannelHistory(channelId, limit = 7) {
   const db = await connect();
   return await db.collection("messages")
@@ -46,17 +60,21 @@ async function fetchChannelHistory(channelId, limit = 7) {
     .toArray();
 }
 
+// ---------- On Ready ----------
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
-// ---- FACTCHECK - MULTI-LAYER LOGIC ----
+// ---------- Fact Checking Pipeline ----------
 async function handleFactChecking(msg) {
-  // 1. Gather search context
   let exaResults = [];
   try {
     exaResults = await exaWebSearch(msg.content, 5);
-  } catch {}
+    console.log("Exa results:", exaResults);
+  } catch (e) {
+    console.error("Exa search error (background):", e);
+  }
+
   let context = '';
   if (exaResults.length > 0) {
     context = exaResults
@@ -66,19 +84,30 @@ async function handleFactChecking(msg) {
   }
   if (!context) return;
 
-  // 2. FAST (FLASH) FACT CHECK
-  const flashResult = await geminiFlashFactCheck(msg.content, context);
+  let flashResult;
+  try {
+    flashResult = await geminiFlashFactCheck(msg.content, context);
+    console.log("Gemini Flash fact check:", flashResult);
+  } catch (e) {
+    console.error("Gemini Flash error:", e);
+    return;
+  }
   if (!flashResult.flag || flashResult.confidence < 0.7) return;
 
-  // 3. PRO ESCALATION IF ENOUGH BUDGET (otherwise, fallback to high-confidence Flash)
   let finalCheck = flashResult;
   if (shouldUseGeminiPro()) {
-    const proResult = await geminiProFactCheck(msg.content, context, flashResult.type);
-    incrementGeminiProUsage();
-    if (proResult.flag && proResult.confidence > 0.85) {
-      finalCheck = proResult;
-    } else {
-      // Pro did not confirm, skip announcing/reporting/auditing this flag
+    try {
+      const proResult = await geminiProFactCheck(msg.content, context, flashResult.type);
+      console.log("Gemini Pro escalated check:", proResult);
+      incrementGeminiProUsage();
+      if (proResult.flag && proResult.confidence > 0.85) {
+        finalCheck = proResult;
+      } else {
+        // Pro did not confirm, abort
+        return;
+      }
+    } catch (e) {
+      console.error("Gemini Pro error:", e);
       return;
     }
   }
@@ -93,7 +122,9 @@ async function handleFactChecking(msg) {
       factCheck: finalCheck,
       checkedAt: new Date(),
     });
-  } catch (e) {}
+  } catch (e) {
+    console.error("DB error (fact_checks):", e);
+  }
 
   try {
     if (finalCheck.confidence > 0.85) {
@@ -102,7 +133,9 @@ async function handleFactChecking(msg) {
         `> ${finalCheck.reason}\n_Context: (automated check, may be imperfect)_`
       );
     }
-  } catch {}
+  } catch (e) {
+    console.error("Error sending factcheck reply:", e);
+  }
 }
 
 client.on("messageCreate", async (msg) => {
@@ -119,10 +152,12 @@ client.on("messageCreate", async (msg) => {
       content: msg.content,
       ts: new Date(),
     });
-  } catch {}
+  } catch (e) {
+    console.error("DB error (messages):", e);
+  }
 
   // --- Run background fact checking and automated logic ---
-  handleFactChecking(msg);
+  handleFactChecking(msg).catch(e => console.error("Factcheck pipeline error:", e));
 
   // --- USER-FACING (@Arbiter) ---
   if (msg.mentions.has(client.user)) {
@@ -143,7 +178,6 @@ client.on("messageCreate", async (msg) => {
           }).join("\n")
         : '';
       const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-
       let newsSection = "";
       const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
       if (newsRegex.test(msg.content)) {
@@ -152,13 +186,16 @@ client.on("messageCreate", async (msg) => {
         if (match) topic = match[2];
         try {
           const exaNews = await exaNewsSearch(topic, 3);
+          console.log("User-facing news search:", exaNews);
           if (exaNews.length) {
             newsSection = `Here are concise, real-time news results for "${topic}":\n` +
               exaNews.map(r => `• ${r.title.trim()} (${r.url})\n${r.text.trim().slice(0,160)}...`).join("\n") + "\n";
           } else newsSection = "No up-to-date news articles found for that topic.";
-        } catch { newsSection = "Unable to retrieve news results right now."; }
+        } catch (e) {
+          newsSection = "Unable to retrieve news results right now.";
+          console.error("News fetch error:", e);
+        }
       }
-
       const prompt =
         `Today is ${dateString}.\n` +
         `Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."\n` +
@@ -167,13 +204,21 @@ client.on("messageCreate", async (msg) => {
 
       // Pro for user, fallback to Flash if out of quota
       let result;
-      if (shouldUseGeminiPro()) {
-        result = await geminiProFactCheck(prompt, "", "response");
-        incrementGeminiProUsage();
-      } else {
-        result = await geminiFlashFactCheck(prompt, "", "response");
+      try {
+        if (shouldUseGeminiPro()) {
+          result = await geminiProFactCheck(prompt, "", "response");
+          incrementGeminiProUsage();
+          console.log("Gemini Pro response (user):", result);
+        } else {
+          result = await geminiFlashFactCheck(prompt, "", "response");
+          console.log("Gemini Flash response (user):", result);
+        }
+      } catch (gemErr) {
+        console.error("Gemini API failure (user-facing):", gemErr);
+        throw gemErr;
       }
 
+      // Gemini result likely an object. If not, just reply as string
       await msg.reply(result.reason || result);
 
       // Store bot response as context for future
@@ -186,9 +231,14 @@ client.on("messageCreate", async (msg) => {
           content: result.reason || result,
           ts: new Date(),
         });
-      } catch {}
+      } catch (e) {
+        console.error("DB error (bot messages):", e);
+      }
     } catch (err) {
-      try { await msg.reply("Can't fetch info right now."); } catch {}
+      console.error("Error in user-facing Gemini reply:", err);
+      try { await msg.reply("Can't fetch info right now."); } catch (replyErr) {
+        console.error("Error sending fallback reply:", replyErr);
+      }
     }
   }
 });
