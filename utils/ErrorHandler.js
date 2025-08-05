@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 const logger = require('./logger');
 
 /**
@@ -11,3 +12,25 @@ function handleError(err, message = null) {
 }
 
 module.exports = { handleError };
+=======
+// errorHandler.js
+const logger = require('./logger');
+
+class ErrorHandler {
+    handle(error, context = '') {
+        logger.error(`Error in ${context}:`, error.message || error);
+        
+        if (error.stack) {
+            logger.debug('Stack trace:', error.stack);
+        }
+        
+        return {
+            success: false,
+            error: error.message || 'An unknown error occurred',
+            context
+        };
+    }
+}
+
+module.exports = new ErrorHandler();
+>>>>>>> 0c4931a (Qwen 3 Code)

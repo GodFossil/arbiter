@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+// logger.js
+>>>>>>> 0c4931a (Qwen 3 Code)
 const winston = require('winston');
 
 const logger = winston.createLogger({
@@ -7,6 +11,7 @@ const logger = winston.createLogger({
         winston.format.errors({ stack: true }),
         winston.format.json()
     ),
+<<<<<<< HEAD
     defaultMeta: { service: 'discord-factcheck-bot' },
     transports: [
         new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
@@ -26,6 +31,22 @@ const path = require('path');
 const logsDir = path.join(__dirname, 'logs');
 if (!fs.existsSync(logsDir)) {
     fs.mkdirSync(logsDir, { recursive: true });
+=======
+    defaultMeta: { service: 'fact-check-bot' },
+    transports: [
+        new winston.transports.File({ filename: 'error.log', level: 'error' }),
+        new winston.transports.File({ filename: 'combined.log' })
+    ]
+});
+
+if (process.env.NODE_ENV !== 'production') {
+    logger.add(new winston.transports.Console({
+        format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.simple()
+        )
+    }));
+>>>>>>> 0c4931a (Qwen 3 Code)
 }
 
 module.exports = logger;

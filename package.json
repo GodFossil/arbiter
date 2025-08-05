@@ -21,6 +21,7 @@
   "author": "Your Name",
   "license": "MIT",
   "dependencies": {
+<<<<<<< HEAD
     "discord.js": "^14.14.1",
     "axios": "^1.6.2",
     "cheerio": "^1.0.0-rc.12",
@@ -36,5 +37,13 @@
   },
   "engines": {
     "node": ">=16.0.0"
+=======
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "git": "^0.1.5",
+    "mongoose": "^8.17.0",
+    "openai": "^5.11.0"
+>>>>>>> 0c4931a (Qwen 3 Code)
   }
 }

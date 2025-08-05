@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 const axios = require('axios');
 const logger = require('./logger');
 
@@ -39,3 +40,35 @@ Write a short, conversational reply (max 1200 chars) that states the verdict and
 }
 
 module.exports = { buildFactCheckReply };
+=======
+// FactCheck.js
+const FactChecker = require('./factChecker');
+const logger = require('./logger');
+
+class FactCheck {
+    constructor() {
+        this.factChecker = FactChecker;
+    }
+
+    async processMessage(message) {
+        try {
+            logger.info(`Processing message from ${message.author.username}: ${message.content}`);
+            
+            const result = await this.factChecker.check(message.content);
+            
+            return {
+                success: true,
+                result
+            };
+        } catch (error) {
+            logger.error('FactCheck process error:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+}
+
+module.exports = new FactCheck();
+>>>>>>> 0c4931a (Qwen 3 Code)

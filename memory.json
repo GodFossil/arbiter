@@ -1,4 +1,6 @@
+// memory.json
 {
+<<<<<<< HEAD
 <<<<<<< HEAD
   "thread_contexts": {},
   "user_preferences": {},
@@ -56,3 +58,8 @@
   }
 }
 >>>>>>> 43e7499 (feat: enhance memory structure with user/channel data tracking)
+=======
+  "version": "1.0",
+  "data": {}
+}
+>>>>>>> 0c4931a (Qwen 3 Code)
