@@ -245,18 +245,41 @@ ${context}
     try {
       await msg.channel.sendTyping();
 
-      // Fetch user and channel memory
-      let userHistoryArr = [], channelHistoryArr = [];
+      // Fetch user and channel memory with robust error handling
+      let userHistoryArr = null, channelHistoryArr = null, userHistory = "", channelHistory = "";
       try {
-        [userHistoryArr, channelHistoryArr] = await Promise.all([
-          fetchUserHistory(msg.author.id, msg.channel.id, 5),
-          fetchChannelHistory(msg.channel.id, 7)
-        ]);
+        userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, 5);
       } catch (e) {
-        try { await msg.reply(`Could not fetch message history: \`${e.message}\``); } catch {}
-        throw e; // Don't proceed if memory fetch fails
+        userHistoryArr = null;
+        try { await msg.reply(`Could not fetch your recent message history: \`${e.message}\``); } catch {}
+        console.warn("Fetch user history failed:", e);
       }
-      // Date for prompt
+      try {
+        channelHistoryArr = await fetchChannelHistory(msg.channel.id, 7);
+      } catch (e) {
+        channelHistoryArr = null;
+        try { await msg.reply(`Could not fetch channel message history: \`${e.message}\``); } catch {}
+        console.warn("Fetch channel history failed:", e);
+      }
+      // If either failed, do NOT send the Gemini prompt.
+      if (!userHistoryArr || !channelHistoryArr) {
+        try {
+          await msg.reply("Not enough message history available for a quality reply. Please try again in a moment.");
+        } catch {}
+        return;
+      }
+
+      // Build context for Gemini prompt as before
+      userHistory = userHistoryArr.length
+        ? userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n")
+        : '';
+      channelHistory = channelHistoryArr.length
+        ? channelHistoryArr.reverse().map(m => {
+            if (m.user === msg.author.id) return `You: ${m.content}`;
+            if (m.user === client.user.id) return `I: ${m.content}`;
+            return (m.username || "User") + ": " + m.content;
+          }).join("\n")
+        : '';
       const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
       // News detection
@@ -282,22 +305,15 @@ ${context}
       }
 
       // Prompt construction
-      const userHistory = userHistoryArr.length
-        ? userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n")
-        : '';
-      const channelHistory = channelHistoryArr.length
-        ? channelHistoryArr.reverse().map(m => {
-            if (m.user === msg.author.id) return `You: ${m.content}`;
-            if (m.user === client.user.id) return `I: ${m.content}`;
-            return (m.username || "User") + ": " + m.content;
-          }).join("\n")
-        : '';
       const prompt = `Today is ${dateString}.
 Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."
-[user history]\n${userHistory}
-[channel context]\n${channelHistory}
+[user history]
+${userHistory}
+[channel context]
+${channelHistory}
 ${newsSection ? `[news]\n${newsSection}` : ""}
-[user message]\n"${msg.content}"
+[user message]
+"${msg.content}"
 [reply]
 `;
 
