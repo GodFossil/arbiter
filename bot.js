@@ -24,24 +24,47 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
   : null;
 
-// Fetch last N user messages in this channel
+// --- In-memory cache for recent user and channel histories ---
+const historyCache = {
+  user: new Map(),
+  channel: new Map()
+};
+const HISTORY_TTL_MS = 4000;
+
+// Cached fetch for user's recent messages in a channel
 async function fetchUserHistory(userId, channelId, limit = 5) {
+  const key = `${userId}:${channelId}:${limit}`;
+  const now = Date.now();
+  const cached = historyCache.user.get(key);
+  if (cached && (now - cached.time < HISTORY_TTL_MS)) {
+    return cached.data;
+  }
   const db = await connect();
-  return await db.collection("messages")
+  const data = await db.collection("messages")
     .find({ user: userId, channel: channelId })
     .sort({ ts: -1 })
     .limit(limit)
     .toArray();
+  historyCache.user.set(key, { time: now, data });
+  return data;
 }
 
-// Fetch last K channel messages, including bots (with "I:" labeling for bot)
+// Cached fetch for all recent messages in a channel
 async function fetchChannelHistory(channelId, limit = 7) {
+  const key = `${channelId}:${limit}`;
+  const now = Date.now();
+  const cached = historyCache.channel.get(key);
+  if (cached && (now - cached.time < HISTORY_TTL_MS)) {
+    return cached.data;
+  }
   const db = await connect();
-  return await db.collection("messages")
+  const data = await db.collection("messages")
     .find({ channel: channelId, content: { $exists: true } })
     .sort({ ts: -1 })
     .limit(limit)
     .toArray();
+  historyCache.channel.set(key, { time: now, data });
+  return data;
 }
 
 /** Utility: Gemini Flash Lite prompt for cheap background tasks */
@@ -78,7 +101,7 @@ client.on("messageCreate", async (msg) => {
   // --- MULTI-STAGE FACT CHECK (BACKGROUND) ---
   (async () => {
     let claimSummary = null, exaResults = null, finalFactCheck = null;
-    let factCheckVerdict = null; // what we'll store
+    let factCheckVerdict = null;
     try {
       // --- Stage 1: Summarize the main claim ---
       let stage1Prompt = `
@@ -92,7 +115,7 @@ User message:
       try {
         stage1resp = await geminiFlash(stage1Prompt);
         if (stage1resp && typeof stage1resp.result === "string") {
-          const line = stage1resp.result.replace(/^[\s"`]+|[\s"`]+$/g, ""); // Cleanup
+          const line = stage1resp.result.replace(/^[\s"`]+|[\s"`]+$/g, "");
           claimSummary = line && line.toUpperCase() !== "NO CLAIM" ? line : null;
         }
       } catch (e) {
@@ -119,7 +142,6 @@ User message:
       }
 
       // --- Robust ambiguous handling (force "inconclusive" verdict if Exa results missing/empty/irrelevant) --
-      // If context is missing, skip LLM, provide fixed output
       if (!context || exaResults.length === 0) {
         factCheckVerdict = {
           verdict: "inconclusive",
@@ -133,7 +155,7 @@ User message:
           );
         } catch {}
       } else if (claimSummary) {
-        // --- Stage 3: Fact check verdict (force "inconclusive" if context unrelated or insufficient) ---
+        // --- Stage 3: Fact check verdict ---
         const factCheckPrompt = `
 You are an expert, careful, and precise fact-checking assistant.
 
@@ -163,7 +185,6 @@ ${context}
             if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
           } catch (err) {}
 
-          // If LLM "hallucinates" or does not follow instructions, force inconclusive anyway.
           if (
             !parsed ||
             !parsed.verdict ||
@@ -210,7 +231,7 @@ ${context}
           console.warn("Fact-checker error:", e);
         }
       }
-      // Save all fact checks (including ambiguous forced verdicts) in DB
+      // Save all fact checks in DB
       const db = await connect();
       await db.collection("fact_checks").insertOne({
         msgId: msg.id,
@@ -245,7 +266,7 @@ ${context}
     try {
       await msg.channel.sendTyping();
 
-      // Fetch user and channel memory with robust error handling
+      // Fetch user and channel memory with robust error handling + cache
       let userHistoryArr = null, channelHistoryArr = null, userHistory = "", channelHistory = "";
       try {
         userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, 5);
@@ -269,7 +290,6 @@ ${context}
         return;
       }
 
-      // Build context for Gemini prompt as before
       userHistory = userHistoryArr.length
         ? userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n")
         : '';
@@ -304,7 +324,6 @@ ${context}
         newsSection = `News search failed: \`${e.message}\``;
       }
 
-      // Prompt construction
       const prompt = `Today is ${dateString}.
 Reply concisely. Use recent context from user, me ("I:"), and others below if relevant. If [news] is present, focus on those results. When describing your past actions, use "I" or "me" instead of "the bot."
 [user history]
