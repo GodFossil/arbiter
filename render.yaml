@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: discord-factcheck-bot
+    env: node
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: PORT
+        value: 3000
+    healthCheckPath: /health
+    disk:
+      name: logs
+      mountPath: /opt/logs
+      sizeGB: 1
