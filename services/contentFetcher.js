@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 const axios = require('axios');
 const cheerio = require('cheerio');
 const logger = require('./logger');
@@ -21,3 +22,28 @@ async function fetchContent(url) {
 }
 
 module.exports = { fetchContent };
+=======
+// contentFetcher.js
+const axios = require('axios');
+const logger = require('./logger');
+
+class ContentFetcher {
+    async fetchContent(url) {
+        try {
+            const response = await axios.get(url, {
+                timeout: 10000,
+                headers: {
+                    'User-Agent': 'FactCheckBot/1.0'
+                }
+            });
+            
+            return response.data;
+        } catch (error) {
+            logger.error(`Failed to fetch content from ${url}:`, error.message);
+            throw error;
+        }
+    }
+}
+
+module.exports = new ContentFetcher();
+>>>>>>> 0c4931a (Qwen 3 Code)

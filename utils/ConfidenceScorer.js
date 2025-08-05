@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 const axios = require('axios');
 const logger = require('./logger');
 
@@ -34,3 +35,38 @@ Return a single float between 0 and 1, with 1 meaning fully verified. Reply with
 }
 
 module.exports = { scoreConfidence };
+=======
+// confidenceScorer.js
+const geminiClient = require('./geminiClient');
+const logger = require('./logger');
+
+class ConfidenceScorer {
+    async scoreConfidence(claim, evidence) {
+        try {
+            const prompt = `
+            Score the confidence level (0-100) that the following claim is true based on the provided evidence.
+            
+            Claim: "${claim}"
+            
+            Evidence: "${evidence}"
+            
+            Return ONLY a number between 0 and 100 representing the confidence level.
+            `;
+            
+            const response = await geminiClient.generateContent(
+                prompt, 
+                'gemini-2.0-flash',
+                { maxTokens: 10 }
+            );
+            
+            const score = parseInt(response.trim(), 10);
+            return isNaN(score) ? 50 : Math.max(0, Math.min(100, score));
+        } catch (error) {
+            logger.error('Confidence scoring error:', error);
+            return 50; // Default neutral score
+        }
+    }
+}
+
+module.exports = new ConfidenceScorer();
+>>>>>>> 0c4931a (Qwen 3 Code)

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 const axios = require('axios');
 const logger = require('./logger');
 
@@ -38,3 +39,41 @@ Text: ${text}
 }
 
 module.exports = { extractClaims };
+=======
+// claimExtractor.js
+const geminiClient = require('./geminiClient');
+const logger = require('./logger');
+
+class ClaimExtractor {
+    async extractClaims(text) {
+        try {
+            const prompt = `
+            Extract factual claims from the following text. Return only a JSON array of claims.
+            
+            Text: "${text}"
+            
+            Output format:
+            ["claim 1", "claim 2", ...]
+            `;
+            
+            const response = await geminiClient.generateContent(
+                prompt, 
+                'gemini-2.0-flash',
+                { maxTokens: 1000 }
+            );
+            
+            try {
+                return JSON.parse(response);
+            } catch (parseError) {
+                logger.error('Failed to parse claims JSON:', parseError);
+                return [];
+            }
+        } catch (error) {
+            logger.error('Claim extraction error:', error);
+            return [];
+        }
+    }
+}
+
+module.exports = new ClaimExtractor();
+>>>>>>> 0c4931a (Qwen 3 Code)
