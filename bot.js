@@ -2,17 +2,18 @@ require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { connect } = require("./mongo");
-const { geminiProFactCheck } = require("./gemini");
+const { geminiFactCheck } = require("./gemini");
 const { exaWebSearch, exaNewsSearch } = require("./exa");
 
 // Print loaded environment variables for debugging
 console.log("ENV:", {
   DISCORD_TOKEN: !!process.env.DISCORD_TOKEN,
   GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
-  GEMINI_API_URL: process.env.GEMINI_API_URL,
+  GEMINI_MODEL: process.env.GEMINI_MODEL,
+  MONGODB_URI: process.env.MONGODB_URI,
+  MONGODB_DB: process.env.MONGODB_DB,
   EXA_API_KEY: !!process.env.EXA_API_KEY,
   EXA_API_URL: process.env.EXA_API_URL,
-  MONGODB_URI: process.env.MONGODB_URI,
   CHANNEL_ID_WHITELIST: process.env.CHANNEL_ID_WHITELIST,
 });
 
@@ -34,7 +35,7 @@ const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
   ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
   : null;
 
-// ---------- History Fetch Functions ----------
+// History Fetch Functions
 async function fetchUserHistory(userId, channelId, limit = 5) {
   const db = await connect();
   return await db.collection("messages")
@@ -52,12 +53,11 @@ async function fetchChannelHistory(channelId, limit = 7) {
     .toArray();
 }
 
-// ---------- On Ready ----------
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
-// ---------- Fact Checking Pipeline ----------
+// Fact Checking Pipeline
 async function handleFactChecking(msg) {
   let exaResults = [];
   try {
@@ -74,15 +74,15 @@ async function handleFactChecking(msg) {
       .join("\n\n");
   }
   if (!context) return;
-  let proResult;
+  let geminiResult;
   try {
-    proResult = await geminiProFactCheck(msg.content, context);
-    console.log("Gemini Pro fact check:", proResult);
+    geminiResult = await geminiFactCheck(msg.content, context);
+    console.log("Gemini API fact check:", geminiResult);
   } catch (e) {
-    console.error("Gemini Pro error (factcheck/background):", e);
+    console.error("Gemini error (factcheck/background):", e);
     return;
   }
-  if (!proResult.flag || proResult.confidence < 0.7) return;
+  if (!geminiResult.flag || geminiResult.confidence < 0.7) return;
   // Store in DB, optionally notify mods/channel
   try {
     const db = await connect();
@@ -91,17 +91,17 @@ async function handleFactChecking(msg) {
       user: msg.author.id,
       content: msg.content,
       exaResults,
-      factCheck: proResult,
+      factCheck: geminiResult,
       checkedAt: new Date(),
     });
   } catch (e) {
     console.error("DB error (fact_checks):", e);
   }
   try {
-    if (proResult.confidence > 0.85) {
+    if (geminiResult.confidence > 0.85) {
       await msg.reply(
-        `⚠️ Possible misinformation or logical problem detected (${proResult.type || 'unspecified'}):\n` +
-        `> ${proResult.reason}\n_Context: (automated check, may be imperfect)_`
+        `⚠️ Possible misinformation or logical problem detected (${geminiResult.type || 'unspecified'}):\n` +
+        `> ${geminiResult.reason}\n_Context: (automated check, may be imperfect)_`
       );
     }
   } catch (e) {
@@ -127,10 +127,10 @@ client.on("messageCreate", async (msg) => {
     console.error("DB error (messages):", e);
   }
 
-  // --- Run background fact checking and automated logic ---
+  // Background fact checking
   handleFactChecking(msg).catch(e => console.error("Factcheck pipeline error:", e));
 
-  // --- USER-FACING (@Arbiter) ---
+  // USER-FACING (@Arbiter)
   if (msg.mentions.has(client.user)) {
     try {
       await msg.channel.sendTyping();
@@ -173,17 +173,15 @@ client.on("messageCreate", async (msg) => {
         `[user history]\n${userHistory}\n[channel context]\n${channelHistory}\n${newsSection ? `[news]\n${newsSection}` : ""}\n` +
         `[user message]\n"${msg.content}"\n[reply]`;
 
-      // Only geminiProFactCheck
       let result;
       try {
-        result = await geminiProFactCheck(prompt, "", "response");
-        console.log("Gemini Pro response (user):", result);
+        result = await geminiFactCheck(prompt, "", "response");
+        console.log("Gemini response (user):", result);
       } catch (gemErr) {
         console.error("Gemini API failure (user-facing):", gemErr);
         throw gemErr;
       }
 
-      // ----------- SAFEGUARD FOR EMPTY REPLIES -------------
       let replyContent = (typeof result === 'object' && result !== null)
         ? (result.reason || result.result || "")
         : (result || "");
@@ -193,7 +191,6 @@ client.on("messageCreate", async (msg) => {
       }
       await msg.reply(replyContent);
 
-      // Store bot response as context for future
       try {
         const db = await connect();
         await db.collection("messages").insertOne({
