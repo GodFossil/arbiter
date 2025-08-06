@@ -7,7 +7,7 @@ const axios = require("axios");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.get('/', (_req, res) => res.send('Arbiter Discord bot - OK'));
+app.get('/', (_req, res) => res.send('Arbiter - OK'));
 app.listen(PORT, () => console.log(`Keepalive server running on port ${PORT}`));
 
 const client = new Client({
@@ -28,7 +28,6 @@ const historyCache = { user: new Map(), channel: new Map() };
 const HISTORY_TTL_MS = 4000;
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
-// ---- Maximum length for auto-factcheck (background only) ----
 const MAX_FACTCHECK_CHARS = 500;
 
 // ---- PERSONALITY INJECTION ----
@@ -205,7 +204,8 @@ async function exaAnswer(query) {
 
 // ---- GEMINI UTILS ----
 async function geminiFlash(prompt, opts) {
-  return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash-lite" });
+  // Only use valid Gemini models here!
+  return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash" });
 }
 
 // ---- DETECTION LOGIC ----
@@ -349,7 +349,7 @@ client.on("messageCreate", async (msg) => {
     })();
   }
 
-    // ---- USER-FACING REPLIES ----
+  // ---- USER-FACING REPLIES ----
   // --- Direct mention or reply-to-bot: always process, regardless of message length ---
   if (isMentioned || isReplyToBot) {
     try {
