@@ -33,13 +33,10 @@ const client = new Client({
 const ALLOWED_CHANNELS = process.env.ALLOWED_CHANNELS
   ? process.env.ALLOWED_CHANNELS.split(',').map(s => s.trim()).filter(Boolean)
   : []; // Put channel IDs here if not using .env
-
 function isBotActiveInChannel(msg) {
   const parentId = msg.channel.parentId;
-  if (ALLOWED_CHANNELS.length === 0) return true; // No restriction
-  // If channel is directly whitelisted
+  if (ALLOWED_CHANNELS.length === 0) return true;
   if (ALLOWED_CHANNELS.includes(msg.channel.id)) return true;
-  // If thread/forum post, check parent
   if (parentId && ALLOWED_CHANNELS.includes(parentId)) return true;
   return false;
 }
@@ -97,6 +94,7 @@ async function fetchUserHistory(userId, channelId, guildId, limit = 5, excludeMs
   historyCache.user.set(key, { time: now, data });
   return data;
 }
+
 async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId = null) {
   const key = `${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
@@ -162,7 +160,7 @@ Summary:
 `.trim();
       let summary = "";
       try {
-        const { result } = await geminiBackground(summaryPrompt, { modelOverride: "gemini-2.5-flash-lite" });
+        const { result } = await geminiBackground(summaryPrompt);
         summary = result;
       } catch (e) {
         summary = "[failed to summarize]";
@@ -224,8 +222,8 @@ async function exaAnswer(query) {
 }
 
 // ---- GEMINI UTILS ----
-async function geminiFlash(prompt, opts) {
-  return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash" });
+async function geminiFlash(prompt) {
+  return await geminiBackground(prompt);
 }
 
 // ---- DETECTION LOGIC ----
@@ -307,7 +305,6 @@ client.on("messageCreate", async (msg) => {
   if (
     msg.author.bot ||
     !(
-      // Allowed: GuildText, all Thread types, and Forum posts
       msg.channel.type === ChannelType.GuildText ||
       msg.channel.type === ChannelType.PublicThread ||
       msg.channel.type === ChannelType.PrivateThread ||
@@ -316,17 +313,14 @@ client.on("messageCreate", async (msg) => {
     ) ||
     !isBotActiveInChannel(msg)
   ) return;
-
   const handled = await handleAdminCommands(msg);
   if (handled) return;
-
   let thisMsgId = null;
   try {
     thisMsgId = await saveUserMessage(msg);
   } catch (e) {
     console.warn("DB store/prune error:", e);
   }
-
   const isMentioned = msg.mentions.has(client.user);
   let isReplyToBot = false;
   let repliedToMsg = null;
@@ -380,13 +374,24 @@ client.on("messageCreate", async (msg) => {
       await msg.channel.sendTyping();
       let userHistoryArr = null, channelHistoryArr = null;
       try {
-        userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId);
+        userHistoryArr = await fetchUserHistory(
+          msg.author.id,
+          msg.channel.id,
+          msg.guildId,
+          5,
+          thisMsgId
+        );
       } catch (e) {
         userHistoryArr = null;
         try { await msg.reply(`Could not fetch your recent message history: \`${e.message}\``); } catch {}
       }
       try {
-        channelHistoryArr = await fetchChannelHistory(msg.channel.id, msg.guildId, 7, thisMsgId);
+        channelHistoryArr = await fetchChannelHistory(
+          msg.channel.id,
+          msg.guildId,
+          7,
+          thisMsgId
+        );
       } catch (e) {
         channelHistoryArr = null;
         try { await msg.reply(`Could not fetch channel message history: \`${e.message}\``); } catch {}
@@ -449,6 +454,7 @@ ${referencedSection}
 "${msg.content}"
 [reply]
 `;
+
       let replyText;
       try {
         const { result } = await geminiUserFacing(prompt);
@@ -456,11 +462,13 @@ ${referencedSection}
       } catch (e) {
         replyText = `AI reply failed: \`${e.message}\``;
       }
+
       try {
         await msg.reply(replyText);
       } catch (e) {
         console.error("Discord reply failed:", e);
       }
+
       try {
         const db = await connect();
         await db.collection("messages").insertOne({
@@ -485,4 +493,5 @@ ${referencedSection}
     }
   }
 });
+
 client.login(process.env.DISCORD_TOKEN);
