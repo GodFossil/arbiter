@@ -4,7 +4,6 @@ const { Client, GatewayIntentBits, Partials, ChannelType } = require("discord.js
 const { connect } = require("./mongo");
 const { geminiUserFacing, geminiBackground } = require("./gemini");
 const axios = require("axios");
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
@@ -29,10 +28,9 @@ const client = new Client({
   ]
 });
 
-// ========== CHANNEL FILTER CONFIG ==========
 const ALLOWED_CHANNELS = process.env.ALLOWED_CHANNELS
   ? process.env.ALLOWED_CHANNELS.split(',').map(s => s.trim()).filter(Boolean)
-  : []; // Put channel IDs here if not using .env
+  : [];
 function isBotActiveInChannel(msg) {
   const parentId = msg.channel.parentId;
   if (ALLOWED_CHANNELS.length === 0) return true;
@@ -40,7 +38,40 @@ function isBotActiveInChannel(msg) {
   if (parentId && ALLOWED_CHANNELS.includes(parentId)) return true;
   return false;
 }
-// ====== END CHANNEL CONFIG ======
+
+// ====== BOT COMMANDS TO IGNORE FROM OTHER BOTS ======
+const KNOWN_BOT_COMMANDS = [
+  "!purge", "!silence", "!user", "!cleanrapsheet", "!rapsheet",
+  "!charge", "!cite", "!book", "!editdailytopic", "<@&13405551155400003624>",
+  "!boot", "!!!", "!editRapSheet", "!ban", "!editDemographics", "!selection",
+  "$selection", "<@&1333261940235047005>", "<@&1333490526296477716>", "<@&1328638724778627094>",
+  "<@&1333264620869128254>", "<@&1333223047385059470>", "<@&1333222016710611036>", "<@&1334073571638644760>",
+  "<@&1335152063067324478>", "<@&1336979693844434987>", "<@&1340140409732468866>", "<@&1317770083375775764>",
+  "<@&1317766628569518112>", "<@&1392325053432987689>", "!define", "&poll", "$demographics", "Surah",
+  "!surah", "<@&1334820484440657941>", "!mimic", "$!", "!$", "$$", "<@&1399605580502405120>", "!arraign",
+  "!trialReset", "!release", "!mark", "!flag", "/endthread", ".newPollButton", "!webhook", "!goTrigger", "!&",
+  "!eval", "!chart", "&test", "++" // Add others here as needed
+];
+function isTrivialOrSafeMessage(content) {
+  if (!content || typeof content !== "string") return true;
+  const safe = [
+    "hello", "hi", "hey", "ok", "okay", "yes", "no", "lol", "sure", "cool", "nice", "thanks",
+    "thank you", "hey arbiter", "sup", "idk", "good morning", "good night"
+  ];
+  const onlyEmoji = /^[\W_]+$/u;
+  const trimmed = content.trim().toLowerCase();
+  return (
+    safe.includes(trimmed)
+    || onlyEmoji.test(content)
+    || trimmed.length < 4
+  );
+}
+function isOtherBotCommand(content) {
+  if (!content) return false;
+  return KNOWN_BOT_COMMANDS.some(cmd =>
+    content.trim().toLowerCase().startsWith(cmd)
+  );
+}
 
 // ---- TUNEABLE PARAMETERS ----
 const historyCache = { user: new Map(), channel: new Map() };
@@ -48,10 +79,16 @@ const HISTORY_TTL_MS = 4000;
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
 const MAX_FACTCHECK_CHARS = 500;
+const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
 You are the invaluable assistant of our Discord debate server. The server is called The Debate Server and it is a community full of brilliant interlocutors. You are to assist us by providing logical analyses and insights. You are to prioritize truth over appeasing others. You will hold no reservations in declaring a user valid or incorrect, provided that you determine either to be the case to the best of your ability. Your personality is calm, direct, bold, stoic, and wise. You are a master of mindfulness and all things philosophy. You are humble. You will answer prompts succinctly, directly, and in as few words as necessary. You will know that brevity is the soul of wit and wisdom. Your name is Arbiter, you may refer to yourself as The Arbiter.
+- Avoid generic or diplomatic statements. If the facts or arguments warrant a judgment or correction, state it directly. Use decisive, unambiguous language whenever you issue an opinion or summary.
+- Never apologize on behalf of others or yourself unless a factual error was made and corrected.
+- If there is true ambiguity, say "uncertain," "no clear winner," or "evidence not provided"—NOT "it depends" or "both sides have a point."
+- Default tone is realistic and direct, not conciliatory.
+- Never use language principally for placation, comfort, or encouragement. Use language for accuracy, and also quips.
 `.trim();
 
 // ---- UTILITIES ----
@@ -78,7 +115,7 @@ async function getDisplayNameById(userId, guild) {
 }
 
 // ---- HISTORY UTILS ----
-async function fetchUserHistory(userId, channelId, guildId, limit = 5, excludeMsgId = null) {
+async function fetchUserHistory(userId, channelId, guildId, limit = 7, excludeMsgId = null) {
   const key = `${userId}:${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
   const cached = historyCache.user.get(key);
@@ -94,7 +131,6 @@ async function fetchUserHistory(userId, channelId, guildId, limit = 5, excludeMs
   historyCache.user.set(key, { time: now, data });
   return data;
 }
-
 async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId = null) {
   const key = `${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
   const now = Date.now();
@@ -132,18 +168,27 @@ async function saveUserMessage(msg) {
     guildName: getGuildName(msg),
     isBot: msg.author.bot,
     content: msg.content,
+    discordMessageId: msg.id,
     ts: new Date(),
   };
   const res = await db.collection("messages").insertOne(doc);
-
-  const count = await db.collection("messages").countDocuments({ type: "message", channel: msg.channel.id, guildId: doc.guildId });
+  const count = await db.collection("messages").countDocuments({
+    type: "message",
+    channel: msg.channel.id,
+    guildId: doc.guildId
+  });
   if (count > MAX_CONTEXT_MESSAGES_PER_CHANNEL) {
     const toSummarize = await db.collection("messages")
       .find({ type: "message", channel: msg.channel.id, guildId: doc.guildId })
       .sort({ ts: 1 })
       .limit(SUMMARY_BLOCK_SIZE)
       .toArray();
-    if (toSummarize.length > 0) {
+
+    // Trivial message filtering for summarization batch
+    const hasSubstantive = toSummarize.some(m => !isTrivialOrSafeMessage(m.content));
+    const trivialPercent = toSummarize.filter(m => isTrivialOrSafeMessage(m.content)).length / toSummarize.length;
+    // Use a count-based threshold, e.g. only summarize if at least 30% are substantive
+    if (toSummarize.length > 0 && hasSubstantive && trivialPercent <= TRIVIAL_HISTORY_THRESHOLD) {
       let userDisplayNames = {};
       if (msg.guild) {
         const uniqueUserIds = [...new Set(toSummarize.map(m => m.user))];
@@ -153,9 +198,19 @@ async function saveUserMessage(msg) {
       }
       const summaryPrompt = `
 ${SYSTEM_INSTRUCTIONS}
-Summarize the following Discord channel messages as a brief neutral log for posterity. Use users' display names when possible.
+Summarize the following Discord channel messages as a brief log for posterity. Use users' display names when possible.
+- If messages include false claims, contradictions, or retractions, state explicitly who was mistaken, who corrected them (and how), and what exactly was the error.
+- If a user admits an error, highlight this. We commend integrity.
+- If a debate remains unresolved or inconclusive by the end of this block, note it is unresolved, but do not imply equivalence as if both sides are equally supported when they are not.
+- Do not soften, balance, or average disagreements where the superior argument is clear. Be direct: flag unsubstantiated claims, debunked assertions, consequential logical fallacies, dishonesty, unwarranted hostility, failures to concede, dodgy tactics, and corrections. Commend outstanding arguments and displays of intellectual honesty.
+- If you detect jokes, sarcasm, or unserious messages, do not treat them as genuine arguments or factual claims. Mention them only to clarify tone, provide context, or explain a lack of stance. Use your best judgement.
+- Avoid unnecessary ambiguity in summary sentences. Assert clearly when a user's claim is unsupported or proven incorrect, and do not use hedging ("may", "might", "possibly") unless there is genuine ambiguity.
+- Whatever the case, do NOT sugar coat your observations. Call things for what they are. Let _truth over everything_ be your primordial tenet.
+- You must begin your output with 'Summary:' and use this bullet-point style for every summary:  
+  • [display name]: [summary sentence]
+- Be specific. If in doubt, prioritize clarity over brevity.
 Messages:
-${toSummarize.map(m => `${userDisplayNames[m.user] || m.username}: ${m.content}`).join("\n")}
+${toSummarize.map(m => `[${new Date(m.ts).toLocaleString()}] ${userDisplayNames[m.user] || m.username}: ${m.content}`).join("\n")}
 Summary:
 `.trim();
       let summary = "";
@@ -176,12 +231,12 @@ Summary:
         endTs: toSummarize[toSummarize.length - 1].ts,
         users: Object.values(userDisplayNames),
         summary,
-        ts: new Date()
+        ts: new Date(),
       });
       await db.collection("messages").deleteMany({
         _id: { $in: toSummarize.map(m => m._id) }
       });
-    }
+    } // End IF substantive
   }
   return res.insertedId;
 }
@@ -198,14 +253,15 @@ async function handleAdminCommands(msg) {
       await msg.reply("All memory erased. Arbiter reset to blank slate.");
       return true;
     } catch (e) {
-      await msg.reply("Failed to erase all memory.");
+      console.warn("[MODLOG] Failed to erase all memory.", e);
+      await msg.reply("The void resists being emptied.");
       return true;
     }
   }
   return false;
 }
 
-// ---- EXA ANSWER API ----
+// ---- EXA FACT CHECK AND NEWS HELPERS ----
 const EXA_API_KEY = process.env.EXA_API_KEY;
 async function exaAnswer(query) {
   try {
@@ -221,6 +277,20 @@ async function exaAnswer(query) {
   }
 }
 
+async function exaSearch(query, numResults = 5) {
+  try {
+    const res = await axios.post(
+      "https://api.exa.ai/search",
+      { query, numResults },
+      { headers: { Authorization: `Bearer ${EXA_API_KEY}` } }
+    );
+    return Array.isArray(res.data.results) ? res.data.results : [];
+  } catch (err) {
+    console.warn("Exa /search failed:", err.message);
+    return [];
+  }
+}
+
 // ---- GEMINI UTILS ----
 async function geminiFlash(prompt) {
   return await geminiBackground(prompt);
@@ -228,26 +298,57 @@ async function geminiFlash(prompt) {
 
 // ---- DETECTION LOGIC ----
 async function detectContradictionOrMisinformation(msg) {
+  if (isTrivialOrSafeMessage(msg.content) || isOtherBotCommand(msg.content)) return {};
+
   const db = await connect();
   const userMessages = await db.collection("messages")
-    .find({ type: "message", user: msg.author.id, channel: msg.channel.id, guildId: msg.guildId, _id: { $ne: msg.id } })
+    .find({
+      type: "message",
+      user: msg.author.id,
+      channel: msg.channel.id,
+      guildId: msg.guildId,
+      _id: { $ne: msg.id }
+    })
     .sort({ ts: -1 })
-    .limit(10)
+    .limit(20)
     .toArray();
 
+  const priorSubstantive = userMessages.filter(m => !isTrivialOrSafeMessage(m.content));
+  if (priorSubstantive.length === 0) return {};
+
+  // Duplicate detection: skip if new message matches last substantive message
+  if (priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim()) return {};
+
   let contradiction = null;
-  if (userMessages.length > 0) {
-    const concatenated = userMessages.map(m => `${m.content}`).reverse().join("\n");
+  let contradictionEvidenceUrl = "";
+  if (priorSubstantive.length > 0) {
+    const concatenated = priorSubstantive
+      .map(m =>
+        m.content.length > MAX_FACTCHECK_CHARS
+          ? m.content.slice(0, MAX_FACTCHECK_CHARS)
+          : m.content
+      )
+      .reverse()
+      .join("\n");
+    const mainContent =
+      msg.content.length > MAX_FACTCHECK_CHARS
+        ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
+        : msg.content;
     const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
-You are a careful contradiction detector.
-Compare the [Previous statements] and the [New message] from the *same user* below.
-Is there a direct contradiction? Only reply in JSON:
-{"contradiction":"yes"|"no", "evidence":"...", "reason":"..."}
+You are a careful contradiction detector for debate analysis.
+Does the [New message] directly contradict any of the [Previous statements] sent by **this exact same user** below?
+Always reply in strict JSON of the form:
+{"contradiction":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
+- "contradiction": Use "yes" if the new message is logically or factually incompatible with a prior message sent by this user; otherwise use "no".
+- "reason": For "yes", concisely explain how the contents of the new message and that of any prior message(s) are contradictory. Do not mention the user, do not narrate ("user said..."), and do not say "these statements conflict." Instead, simply state the essence of the contradiction, e.g., "Spheres are not flat," or "Vaccines either cause autism or they do not cause autism," or "There are no married bachelors." For "no", use an empty string.
+- "evidence": For "yes", provide the quoted contents of the user's prior message that contains the contradictory statement. For "no", use an empty string.
+- "url": For "yes", include a direct Discord link to the contradictory message (format: https://discord.com/channels/<server_id>/<channel_id>/<message_id>). For "no", use an empty string.
+In all cases, never reply with non-JSON or leave any field out. If you do not find a contradiction, respond "contradiction":"no".
 [Previous statements]
 ${concatenated}
 [New message]
-${msg.content}
+${mainContent}
 `.trim();
     try {
       const { result } = await geminiFlash(contradictionPrompt);
@@ -257,6 +358,17 @@ ${msg.content}
         if (match) parsed = JSON.parse(match[0]);
       } catch {}
       if (parsed && parsed.contradiction === "yes") {
+        // Find and link the matching prior message by content.
+        const evidenceMsg = priorSubstantive.find(
+          m =>
+            parsed.evidence &&
+            m.content.trim() === parsed.evidence.trim()
+        );
+        contradictionEvidenceUrl =
+          evidenceMsg && evidenceMsg.discordMessageId
+            ? `https://discord.com/channels/${evidenceMsg.guildId}/${evidenceMsg.channel}/${evidenceMsg.discordMessageId}`
+            : "";
+        parsed.url = contradictionEvidenceUrl;
         contradiction = parsed;
       }
     } catch (e) {
@@ -265,14 +377,26 @@ ${msg.content}
   }
   let misinformation = null;
   if (!contradiction) {
-    const answer = await exaAnswer(msg.content);
-    if (answer) {
-      const misinfoPrompt = `
+    const mainContent =
+      msg.content.length > MAX_FACTCHECK_CHARS
+        ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
+        : msg.content;
+    const answer = await exaAnswer(mainContent);
+
+    // Do not call LLM if Exa answer is missing/empty/meaningless
+    if (!answer || answer.trim() === "" || /no relevant results|no results/i.test(answer)) return { contradiction, misinformation: null };
+
+    const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 You are a careful fact-checking assistant.
-Does the [User message] contain blatant misinformation, as shown by contradiction with the [Web context]? Only respond when the message contains **misinformation**. Do not reply if the message is true, neutral, or off-topic.
-Output strict JSON, only if there is *blatant* misinformation:
-{"misinformation":"yes", "reason":"...", "evidence":"..."}
+Does the [User message] contain misinformation according to the [Web context]?
+Always reply in strict JSON of the form:
+{"misinformation":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
+- "misinformation": Use "yes" if the user's message contains critical misinformation; otherwise use "no".
+- "reason": For "yes", state precisely what makes the message false or misinformative. For "no", explain why: e.g. it is accurate, factual, a joke, off-topic, or unfalsifiable. If web context is missing or inconclusive, state so.
+- "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the contents of the user message. The quote or summary must be supported by the contents of the provided "url". For "no", use an empty string.
+- "url": For "yes", include the URL that contains the corroborating source material of the provided evidence. For "no", use an empty string.
+In all cases, never reply with non-JSON or leave any field out. If you can't find any suitable evidence, respond "misinformation":"no".
 [User message]
 ${msg.content}
 [Web context]
@@ -294,14 +418,14 @@ ${answer}
     }
   }
   return { contradiction, misinformation };
-}
 
+// ------ DISCORD BOT EVENT HANDLER ------
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
 client.on("messageCreate", async (msg) => {
-  // ------------- CHANNEL/FORUM/TOPIC/TEXT FILTER -------------  
+  // Filter for allowed channel types and whitelisted channels (text, thread, forum)
   if (
     msg.author.bot ||
     !(
@@ -313,14 +437,22 @@ client.on("messageCreate", async (msg) => {
     ) ||
     !isBotActiveInChannel(msg)
   ) return;
+
+  // Ignore trivial content or known other bot commands
+  if (isOtherBotCommand(msg.content) || isTrivialOrSafeMessage(msg.content)) return;
+
+  // Handle admin command (memory wipe)
   const handled = await handleAdminCommands(msg);
   if (handled) return;
+
+    // Store the message!
   let thisMsgId = null;
   try {
     thisMsgId = await saveUserMessage(msg);
   } catch (e) {
     console.warn("DB store/prune error:", e);
   }
+
   const isMentioned = msg.mentions.has(client.user);
   let isReplyToBot = false;
   let repliedToMsg = null;
@@ -336,33 +468,33 @@ client.on("messageCreate", async (msg) => {
     }
   }
 
-    // ============ BACKGROUND DETECTION =============
+  // ============ BACKGROUND DETECTION =============
   if (msg.content.length <= MAX_FACTCHECK_CHARS) {
     (async () => {
       let detection = null;
       try {
         detection = await detectContradictionOrMisinformation(msg);
       } catch (e) {
-        console.warn("Detection failure:", e);
+        console.warn("Detection failure (silent to user):", e);
       }
       if (detection) {
-        if (detection.contradiction) {
-          try {
-            await msg.reply(
-              `⚡ **CONTRADICTION DETECTED** ⚡\n` +
-              `This message contradicts a prior statement you made:\n` +
-              `> ${detection.contradiction.evidence}\n` +
-              `Reason: ${detection.contradiction.reason}`
-            );
-          } catch {}
-        } else if (detection.misinformation) {
-          try {
-            await msg.reply(
-              `🚩 **MISINFORMATION DETECTED** 🚩\n` +
-              `Reason: ${detection.misinformation.reason}\n` +
-              (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}` : "")
-            );
-          } catch {}
+        // CONTRADICTION DETECTED (with jump link if present)
+        if (detection.contradiction && detection.contradiction === "yes") {
+          let evidenceUrl = detection.url || "";
+          await msg.reply(
+            `⚡ **CONTRADICTION DETECTED** ⚡\n` +
+            `This message contradicts a prior statement you made:\n` +
+            `> ${detection.evidence}\n` +
+            `Reason: ${detection.reason}` +
+            (evidenceUrl ? `\n[Jump to message](${evidenceUrl})` : "")
+          );
+        } else if (detection.misinformation && detection.misinformation === "yes") {
+          await msg.reply(
+            `🚩 **MISINFORMATION DETECTED** 🚩\n` +
+            `Reason: ${detection.reason}\n` +
+            (detection.evidence ? `Evidence: ${detection.evidence}\n` : "") +
+            (detection.url ? `Source: ${detection.url}` : "")
+          );
         }
       }
     })();
@@ -372,39 +504,50 @@ client.on("messageCreate", async (msg) => {
   if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
+
       let userHistoryArr = null, channelHistoryArr = null;
       try {
         userHistoryArr = await fetchUserHistory(
-          msg.author.id,
-          msg.channel.id,
-          msg.guildId,
-          5,
-          thisMsgId
+          msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId
         );
       } catch (e) {
         userHistoryArr = null;
-        try { await msg.reply(`Could not fetch your recent message history: \`${e.message}\``); } catch {}
+        try { await msg.reply("The past refuses to reveal itself."); } catch {}
       }
       try {
         channelHistoryArr = await fetchChannelHistory(
-          msg.channel.id,
-          msg.guildId,
-          7,
-          thisMsgId
+          msg.channel.id, msg.guildId, 7, thisMsgId
         );
       } catch (e) {
         channelHistoryArr = null;
-        try { await msg.reply(`Could not fetch channel message history: \`${e.message}\``); } catch {}
+        try { await msg.reply("All context is lost to the ether."); } catch {}
       }
+
       if (!userHistoryArr || !channelHistoryArr) {
         try {
-          await msg.reply("Not enough message history available for a quality reply. Please try again in a moment.");
+          await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
         } catch {}
         return;
       }
+
+            // -- Contextual triviality check: only proceed if enough substance
+      const allHistContent = [
+        ...userHistoryArr.map(m => m.content),
+        ...channelHistoryArr.map(m => m.content)
+      ];
+      const trivialCount = allHistContent.filter(isTrivialOrSafeMessage).length;
+      const totalCount = allHistContent.length;
+      if (totalCount > 0 && (trivialCount / totalCount) > 0.8) {
+        try {
+          await msg.reply("Little of substance has been spoken here so far.");
+        } catch {}
+        return;
+      }
+
       function botName() {
         return Math.random() < 0.33 ? "Arbiter" : (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
       }
+
       const userHistory = userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n");
       const channelHistory = channelHistoryArr.map(m => {
         if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
@@ -414,6 +557,7 @@ client.on("messageCreate", async (msg) => {
       }).join("\n");
       const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
 
+      // ---- NEWS SECTION: Exa /search ----
       let newsSection = "";
       try {
         const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
@@ -421,9 +565,13 @@ client.on("messageCreate", async (msg) => {
           let topic = "world events";
           const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
           if (match) topic = match[2];
-          const answer = await exaAnswer(`latest news about ${topic}`);
-          if (answer) {
-            newsSection = `Here are concise, real-time news results for "${topic}":\n${answer}\n`;
+          const results = await exaSearch(`latest news about ${topic}`, 5);
+          if (results && results.length) {
+            newsSection =
+              `Here are real-time news headlines for "${topic}":\n` +
+              results.map(r =>
+                `• [${r.title}](${r.url})\n  ${r.text ? r.text.slice(0, 200) : ''}`
+              ).join("\n");
           } else {
             newsSection = "No up-to-date news articles found for that topic.";
           }
@@ -431,8 +579,7 @@ client.on("messageCreate", async (msg) => {
       } catch (e) {
         newsSection = `News search failed: \`${e.message}\``;
       }
-
-            // If this is a reply to a message (user or bot), treat it as the subject in the context
+      // If this is a reply to a message (user or bot), treat it as the subject in the context
       let referencedSection = "";
       if (repliedToMsg) {
         referencedSection =
@@ -440,10 +587,17 @@ client.on("messageCreate", async (msg) => {
             repliedToMsg.member ? repliedToMsg.member.displayName : repliedToMsg.author.username
           } (${repliedToMsg.author.username})\n${repliedToMsg.content}\n`;
       }
+
       const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 Today is ${dateString}.
-Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if they help. If [news] is present, focus on those results.${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's question.` : ""}
+Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
+- Do not use ambiguous hedging or "on the one hand/on the other hand" language unless it is genuinely necessary.
+- Favor declarative, direct statements. When a position is unsupported, say so clearly and confidently.
+- Avoid generic phrases such as "It is important to note...", "It depends...", or "While both sides...".
+- Never conclude that "both sides have a point" if one side's claim is demonstrably weaker or unsupported.
+- Do not default to proposing compromise unless the evidence is genuinely balanced.
+- If you must indicate ambiguity, specify the best-supported or most-reasonable argument, do not equate unequal substantiations.` : ""}
 [user history]
 ${userHistory}
 [channel context]
@@ -460,15 +614,14 @@ ${referencedSection}
         const { result } = await geminiUserFacing(prompt);
         replyText = result;
       } catch (e) {
-        replyText = `AI reply failed: \`${e.message}\``;
+        replyText = "The Arbiter chooses silence.";
+        console.warn("Gemini user-facing error:", e);
       }
-
       try {
         await msg.reply(replyText);
       } catch (e) {
         console.error("Discord reply failed:", e);
       }
-
       try {
         const db = await connect();
         await db.collection("messages").insertOne({
@@ -482,16 +635,17 @@ ${referencedSection}
           guildName: getGuildName(msg),
           isBot: true,
           content: replyText,
-          ts: new Date()
+          ts: new Date(),
         });
       } catch (e) {
         console.warn("DB insert error (bot reply):", e);
       }
     } catch (err) {
-      try { await msg.reply(`Something went wrong: \`${err.message}\``); } catch {}
+      try {
+        await msg.reply("Nobody will help you.");
+      } catch {}
       console.error("Gemini user-facing failed:", err);
     }
   }
 });
-
 client.login(process.env.DISCORD_TOKEN);
