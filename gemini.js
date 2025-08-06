@@ -1,6 +1,4 @@
-// gemini.js
 const axios = require('axios');
-
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
@@ -24,7 +22,7 @@ async function geminiRequest(prompt, modelNames, opts = {}) {
 }
 
 exports.geminiBackground = (prompt, opts) =>
-  geminiRequest(prompt, ['gemini-2.5-flash-lite', 'exa'], opts);
+  geminiRequest(prompt, ['gemini-2.5-flash-lite', 'gemini-2.5-flash'], opts);
 
 exports.geminiUserFacing = (prompt, opts) =>
   geminiRequest(prompt, ['gemini-2.5-pro', 'gemini-2.5-flash'], opts);
