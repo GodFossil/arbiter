@@ -298,7 +298,14 @@ async function geminiFlash(prompt) {
 
 // ---- DETECTION LOGIC ----
 async function detectContradictionOrMisinformation(msg) {
-  if (isTrivialOrSafeMessage(msg.content) || isOtherBotCommand(msg.content)) return {};
+  let contradiction = null;
+  let contradictionEvidenceUrl = "";
+  let misinformation = null;
+
+  // Trivial message & other bot command skip for contradiction/misinformation:
+  if (isTrivialOrSafeMessage(msg.content) || isOtherBotCommand(msg.content)) {
+    return { contradiction: null, misinformation: null };
+  }
 
   const db = await connect();
   const userMessages = await db.collection("messages")
@@ -314,13 +321,14 @@ async function detectContradictionOrMisinformation(msg) {
     .toArray();
 
   const priorSubstantive = userMessages.filter(m => !isTrivialOrSafeMessage(m.content));
-  if (priorSubstantive.length === 0) return {};
+  if (priorSubstantive.length === 0) return { contradiction: null, misinformation: null };
 
   // Duplicate detection: skip if new message matches last substantive message
-  if (priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim()) return {};
+  if (priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim()) {
+    return { contradiction: null, misinformation: null };
+  }
 
-  let contradiction = null;
-  let contradictionEvidenceUrl = "";
+  // ---- CONTRADICTION CHECK ----
   if (priorSubstantive.length > 0) {
     const concatenated = priorSubstantive
       .map(m =>
@@ -375,7 +383,7 @@ ${mainContent}
       console.warn("Contradiction detection error:", e);
     }
   }
-  let misinformation = null;
+    // ---- MISINFORMATION CHECK ----
   if (!contradiction) {
     const mainContent =
       msg.content.length > MAX_FACTCHECK_CHARS
@@ -383,8 +391,10 @@ ${mainContent}
         : msg.content;
     const answer = await exaAnswer(mainContent);
 
-    // Do not call LLM if Exa answer is missing/empty/meaningless
-    if (!answer || answer.trim() === "" || /no relevant results|no results/i.test(answer)) return { contradiction, misinformation: null };
+    // Do not check LLM if Exa answer is missing/empty/meaningless
+    if (!answer || answer.trim() === "" || /no relevant results|no results/i.test(answer)) {
+      return { contradiction, misinformation: null };
+    }
 
     const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
@@ -402,22 +412,22 @@ ${msg.content}
 [Web context]
 ${answer}
 `.trim();
+    try {
+      const { result } = await geminiFlash(misinfoPrompt);
+      let parsed = null;
       try {
-        const { result } = await geminiFlash(misinfoPrompt);
-        let parsed = null;
-        try {
-          const match = result.match(/\{[\s\S]*?\}/);
-          if (match) parsed = JSON.parse(match[0]);
-        } catch {}
-        if (parsed && parsed.misinformation === "yes") {
-          misinformation = parsed;
-        }
-      } catch (e) {
-        console.warn("Misinformation detection error:", e);
+        const match = result.match(/\{[\s\S]*?\}/);
+        if (match) parsed = JSON.parse(match[0]);
+      } catch {}
+      if (parsed && parsed.misinformation === "yes") {
+        misinformation = parsed;
       }
+    } catch (e) {
+      console.warn("Misinformation detection error:", e);
     }
   }
   return { contradiction, misinformation };
+}
 
 // ------ DISCORD BOT EVENT HANDLER ------
 client.once("ready", () => {
