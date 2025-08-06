@@ -14,14 +14,36 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageTyping
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.GuildMember, Partials.User]
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction,
+    Partials.GuildMember,
+    Partials.User,
+    Partials.ThreadMember
+  ]
 });
 
-const CHANNEL_ID_WHITELIST = process.env.CHANNEL_ID_WHITELIST
-  ? process.env.CHANNEL_ID_WHITELIST.split(',').map(s => s.trim()).filter(Boolean)
-  : null;
+// ========== CHANNEL FILTER CONFIG ==========
+const ALLOWED_CHANNELS = process.env.ALLOWED_CHANNELS
+  ? process.env.ALLOWED_CHANNELS.split(',').map(s => s.trim()).filter(Boolean)
+  : []; // Put channel IDs here if not using .env
+
+function isBotActiveInChannel(msg) {
+  const parentId = msg.channel.parentId;
+  if (ALLOWED_CHANNELS.length === 0) return true; // No restriction
+  // If channel is directly whitelisted
+  if (ALLOWED_CHANNELS.includes(msg.channel.id)) return true;
+  // If thread/forum post, check parent
+  if (parentId && ALLOWED_CHANNELS.includes(parentId)) return true;
+  return false;
+}
+// ====== END CHANNEL CONFIG ======
 
 // ---- TUNEABLE PARAMETERS ----
 const historyCache = { user: new Map(), channel: new Map() };
@@ -171,7 +193,6 @@ async function handleAdminCommands(msg) {
   if (!msg.guild) return false;
   const ownerId = msg.guild.ownerId || (await msg.guild.fetchOwner()).id;
   if (msg.author.id !== ownerId) return false;
-
   if (msg.content === "!arbiter_reset_all") {
     try {
       const db = await connect();
@@ -204,7 +225,6 @@ async function exaAnswer(query) {
 
 // ---- GEMINI UTILS ----
 async function geminiFlash(prompt, opts) {
-  // Only use valid Gemini models here!
   return await geminiBackground(prompt, { ...opts, modelOverride: "gemini-2.5-flash" });
 }
 
@@ -245,7 +265,6 @@ ${msg.content}
       console.warn("Contradiction detection error:", e);
     }
   }
-
   let misinformation = null;
   if (!contradiction) {
     const answer = await exaAnswer(msg.content);
@@ -254,7 +273,6 @@ ${msg.content}
 ${SYSTEM_INSTRUCTIONS}
 You are a careful fact-checking assistant.
 Does the [User message] contain blatant misinformation, as shown by contradiction with the [Web context]? Only respond when the message contains **misinformation**. Do not reply if the message is true, neutral, or off-topic.
-
 Output strict JSON, only if there is *blatant* misinformation:
 {"misinformation":"yes", "reason":"...", "evidence":"..."}
 [User message]
@@ -262,7 +280,6 @@ ${msg.content}
 [Web context]
 ${answer}
 `.trim();
-
       try {
         const { result } = await geminiFlash(misinfoPrompt);
         let parsed = null;
@@ -286,8 +303,19 @@ client.once("ready", () => {
 });
 
 client.on("messageCreate", async (msg) => {
-  if (msg.author.bot || msg.channel.type !== ChannelType.GuildText) return;
-  if (CHANNEL_ID_WHITELIST && !CHANNEL_ID_WHITELIST.includes(msg.channel.id)) return;
+  // ------------- CHANNEL/FORUM/TOPIC/TEXT FILTER -------------  
+  if (
+    msg.author.bot ||
+    !(
+      // Allowed: GuildText, all Thread types, and Forum posts
+      msg.channel.type === ChannelType.GuildText ||
+      msg.channel.type === ChannelType.PublicThread ||
+      msg.channel.type === ChannelType.PrivateThread ||
+      msg.channel.type === ChannelType.AnnouncementThread ||
+      msg.channel.type === ChannelType.GuildForum
+    ) ||
+    !isBotActiveInChannel(msg)
+  ) return;
 
   const handled = await handleAdminCommands(msg);
   if (handled) return;
@@ -314,11 +342,8 @@ client.on("messageCreate", async (msg) => {
     }
   }
 
-  // ============ BACKGROUND DETECTION =============
-  // --- EXCLUDE long messages except for direct mention/reply ---
-  if (
-    msg.content.length <= MAX_FACTCHECK_CHARS
-  ) {
+    // ============ BACKGROUND DETECTION =============
+  if (msg.content.length <= MAX_FACTCHECK_CHARS) {
     (async () => {
       let detection = null;
       try {
@@ -350,11 +375,9 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ---- USER-FACING REPLIES ----
-  // --- Direct mention or reply-to-bot: always process, regardless of message length ---
   if (isMentioned || isReplyToBot) {
     try {
       await msg.channel.sendTyping();
-
       let userHistoryArr = null, channelHistoryArr = null;
       try {
         userHistoryArr = await fetchUserHistory(msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId);
@@ -374,7 +397,6 @@ client.on("messageCreate", async (msg) => {
         } catch {}
         return;
       }
-
       function botName() {
         return Math.random() < 0.33 ? "Arbiter" : (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
       }
@@ -405,7 +427,7 @@ client.on("messageCreate", async (msg) => {
         newsSection = `News search failed: \`${e.message}\``;
       }
 
-      // If this is a reply to a message (user or bot), treat it as the subject in the context
+            // If this is a reply to a message (user or bot), treat it as the subject in the context
       let referencedSection = "";
       if (repliedToMsg) {
         referencedSection =
@@ -413,7 +435,6 @@ client.on("messageCreate", async (msg) => {
             repliedToMsg.member ? repliedToMsg.member.displayName : repliedToMsg.author.username
           } (${repliedToMsg.author.username})\n${repliedToMsg.content}\n`;
       }
-
       const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 Today is ${dateString}.
@@ -464,5 +485,4 @@ ${referencedSection}
     }
   }
 });
-
 client.login(process.env.DISCORD_TOKEN);
