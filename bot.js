@@ -112,6 +112,10 @@ async function getDisplayNameById(userId, guild) {
   } catch {
     return userId;
   }
+function cleanUrl(url) {
+  // Remove trailing ),)),.,,;: etc. but keep internal punctuation intact
+  return url.replace(/[)\].,;:!?]+$/g, '');
+  }
 }
 
 // ---- HISTORY UTILS ----
@@ -294,11 +298,13 @@ async function exaAnswer(query) {
       { headers: { Authorization: `Bearer ${EXA_API_KEY}` } }
     );
     let urls = [];
-    // Bonus: Try to extract URLs from answer field if not provided
-    if (res.data?.urls) urls = Array.isArray(res.data.urls) ? res.data.urls : [res.data.urls];
+    if (res.data?.urls) {
+      urls = Array.isArray(res.data.urls) ? res.data.urls : [res.data.urls];
+      urls = urls.map(u => cleanUrl(u));
+    }
     if ((!urls.length) && typeof res.data.answer === "string") {
       const re = /(https?:\/\/[^\s<>"'`]+)/g;
-      urls = Array.from(res.data.answer.matchAll(re), m => m[1]);
+      urls = Array.from(res.data.answer.matchAll(re), m => cleanUrl(m[1]));
     }
     return { answer: res.data.answer || "", urls: urls };
   } catch (err) {
@@ -621,13 +627,13 @@ client.on("messageCreate", async (msg) => {
         const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
         if (match) topic = match[2];
         const results = await exaSearch(`latest news about ${topic}`, 5);
+        // Inside your // ---- NEWS SECTION ---- block
         if (results && results.length) {
-          newsSection =
-            `Here are real-time news headlines for "${topic}":\n` +
-            results.map(r =>
-              `• [${r.title}](${r.url})\n  ${r.text ? r.text.slice(0, 200) : ''}`
-            ).join("\n");
-          sourcesUsed = results.map(r => r.url).filter(Boolean);
+          newsSection = (`Here are real-time news headlines for "${topic}":\n` +
+          results.map(r =>
+            `• [${r.title}](${r.url})\n  ${r.text ? r.text.slice(0, 200) : ''}`
+          ).join("\n"));
+          sourcesUsed = results.map(r => cleanUrl(r.url)).filter(Boolean); // <-- ADD cleanUrl()
         } else {
           newsSection = "No up-to-date news articles found for that topic.";
         }
@@ -685,14 +691,16 @@ ${referencedSection}
 
     // ---- Send reply, platform source button if URLs exist ----
         console.log('[DEBUG] sourcesUsed:', sourcesUsed);
-    try {
-        const filteredSources = sourcesUsed.filter(u => typeof u === "string" && u.startsWith("http"));
+      try {
+         const filteredSources = sourcesUsed
+        .map(u => cleanUrl(u))
+        .filter(u => typeof u === "string" && u.startsWith("http"));
         if (filteredSources.length > 0) {
         const replyMsg = await msg.reply({ content: replyText, components: [] });
         const sourceButton = makeSourcesButton(filteredSources, replyMsg.id);
         await replyMsg.edit({ components: [sourceButton] });
         latestSourcesByBotMsg.set(replyMsg.id, { urls: filteredSources, timestamp: Date.now() });
-    }   else {
+      } else {
         await msg.reply(replyText);
     }
     } catch (e) {
