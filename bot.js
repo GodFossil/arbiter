@@ -112,10 +112,9 @@ async function getDisplayNameById(userId, guild) {
   } catch {
     return userId;
   }
+}
 function cleanUrl(url) {
-  // Remove trailing ),)),.,,;: etc. but keep internal punctuation intact
   return url.replace(/[)\].,;:!?]+$/g, '');
-  }
 }
 
 // ---- HISTORY UTILS ----
