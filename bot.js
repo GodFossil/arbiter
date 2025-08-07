@@ -1,6 +1,6 @@
 require("dotenv").config();
 const express = require("express");
-const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
 const { connect } = require("./mongo");
 const { geminiUserFacing, geminiBackground } = require("./gemini");
 const axios = require("axios");
@@ -472,15 +472,15 @@ client.on('interactionCreate', async interaction => {
   const sources = latestSourcesByBotMsg.get(msgId);
 
   if (!sources) {
-    await interaction.reply({ content: "No source information found for this message.", ephemeral: true });
+    await interaction.reply({ content: "No source information found for this message.", flags: MessageFlags.Ephemeral });
     return;
   }
   if (!sources.urls || !sources.urls.length) {
-    await interaction.reply({ content: "No URLs were referenced in this response.", ephemeral: true });
+    await interaction.reply({ content: "No URLs were referenced in this response.", flags: MessageFlags.Ephemeral });
     return;
   }
   const resp = `**Sources referenced:**\n` + sources.urls.map(u => `<${u}>`).join('\n');
-  await interaction.reply({ content: resp, ephemeral: true });
+  await interaction.reply({ content: resp, flags: MessageFlags.Ephemeral });
 });
 
 client.on("messageCreate", async (msg) => {
@@ -684,13 +684,15 @@ ${referencedSection}
     }
 
     // ---- Send reply, platform source button if URLs exist ----
+        console.log('[DEBUG] sourcesUsed:', sourcesUsed);
     try {
-      if (sourcesUsed.length > 0) {
-        const replyMsg = await msg.reply({ content: replyText, components: [ makeSourcesButton(sourcesUsed, msg.id) ] });
-        latestSourcesByBotMsg.set(replyMsg.id, { urls: sourcesUsed, timestamp: Date.now() });
-      } else {
+        const filteredSources = sourcesUsed.filter(u => typeof u === "string" && u.startsWith("http"));
+        if (filteredSources.length > 0) {
+        const replyMsg = await msg.reply({ content: replyText, components: [ makeSourcesButton(filteredSources, msg.id) ] });
+        latestSourcesByBotMsg.set(replyMsg.id, { urls: filteredSources, timestamp: Date.now() });
+    }   else {
         await msg.reply(replyText);
-      }
+    }
     } catch (e) {
       console.error("Discord reply failed:", e);
     }
