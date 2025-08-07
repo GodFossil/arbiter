@@ -161,8 +161,8 @@ function makeSourcesButton(sourceArray, msgId) {
   return new ActionRowBuilder().addComponents([
     new ButtonBuilder()
       .setCustomId(`${SOURCE_BUTTON_ID}:${msgId}`)
-      .setLabel('Show Sources')
-      .setStyle(ButtonStyle.Primary)
+      .setLabel('\uD835\uDF8A')
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(!sourceArray || sourceArray.length === 0)
   ]);
 }
