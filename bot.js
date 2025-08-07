@@ -1,6 +1,6 @@
 require("dotenv").config();
 const express = require("express");
-const { Client, GatewayIntentBits, Partials, ChannelType } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType } = require("discord.js");
 const { connect } = require("./mongo");
 const { geminiUserFacing, geminiBackground } = require("./gemini");
 const axios = require("axios");
@@ -154,6 +154,29 @@ async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId =
   return result;
 }
 
+// Source button logic
+const SOURCE_BUTTON_ID = "arbiter-show-sources";
+
+function makeSourcesButton(sourceArray, msgId) {
+  return new ActionRowBuilder().addComponents([
+    new ButtonBuilder()
+      .setCustomId(`${SOURCE_BUTTON_ID}:${msgId}`)
+      .setLabel('Show Sources')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(!sourceArray || sourceArray.length === 0)
+  ]);
+}
+
+let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
+
+setInterval(() => {
+  // Clean up after 1 hour
+  const cutoff = Date.now() - 3600 * 1000;
+  for (const [msgId, obj] of latestSourcesByBotMsg.entries()) {
+    if (obj.timestamp < cutoff) latestSourcesByBotMsg.delete(msgId);
+  }
+}, 10 * 60 * 1000);
+
 // ---- MEMORY SAVE WITH META ----
 async function saveUserMessage(msg) {
   const db = await connect();
@@ -270,10 +293,17 @@ async function exaAnswer(query) {
       { query, type: "neural" },
       { headers: { Authorization: `Bearer ${EXA_API_KEY}` } }
     );
-    return res.data.answer || "";
+    let urls = [];
+    // Bonus: Try to extract URLs from answer field if not provided
+    if (res.data?.urls) urls = Array.isArray(res.data.urls) ? res.data.urls : [res.data.urls];
+    if ((!urls.length) && typeof res.data.answer === "string") {
+      const re = /(https?:\/\/[^\s<>"'`]+)/g;
+      urls = Array.from(res.data.answer.matchAll(re), m => m[1]);
+    }
+    return { answer: res.data.answer || "", urls: urls };
   } catch (err) {
     console.warn("Exa /answer failed:", err.message);
-    return "";
+    return { answer: "", urls: [] };
   }
 }
 
@@ -434,6 +464,25 @@ client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
+client.on('interactionCreate', async interaction => {
+  if (interaction.type !== InteractionType.MessageComponent) return;
+  if (!interaction.customId.startsWith(SOURCE_BUTTON_ID)) return;
+
+  const msgId = interaction.customId.split(':')[1];
+  const sources = latestSourcesByBotMsg.get(msgId);
+
+  if (!sources) {
+    await interaction.reply({ content: "No source information found for this message.", ephemeral: true });
+    return;
+  }
+  if (!sources.urls || !sources.urls.length) {
+    await interaction.reply({ content: "No URLs were referenced in this response.", ephemeral: true });
+    return;
+  }
+  const resp = `**Sources referenced:**\n` + sources.urls.map(u => `<${u}>`).join('\n');
+  await interaction.reply({ content: resp, ephemeral: true });
+});
+
 client.on("messageCreate", async (msg) => {
   // Filter for allowed channel types and whitelisted channels (text, thread, forum)
   if (
@@ -512,93 +561,90 @@ client.on("messageCreate", async (msg) => {
 
   // ---- USER-FACING REPLIES ----
   if (isMentioned || isReplyToBot) {
+  try {
+    await msg.channel.sendTyping();
+    let userHistoryArr = null, channelHistoryArr = null;
     try {
-      await msg.channel.sendTyping();
-
-      let userHistoryArr = null, channelHistoryArr = null;
+      userHistoryArr = await fetchUserHistory(
+        msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId
+      );
+    } catch (e) {
+      userHistoryArr = null;
+      try { await msg.reply("The past refuses to reveal itself."); } catch {}
+    }
+    try {
+      channelHistoryArr = await fetchChannelHistory(
+        msg.channel.id, msg.guildId, 7, thisMsgId
+      );
+    } catch (e) {
+      channelHistoryArr = null;
+      try { await msg.reply("All context is lost to the ether."); } catch {}
+    }
+    if (!userHistoryArr || !channelHistoryArr) {
       try {
-        userHistoryArr = await fetchUserHistory(
-          msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId
-        );
-      } catch (e) {
-        userHistoryArr = null;
-        try { await msg.reply("The past refuses to reveal itself."); } catch {}
-      }
+        await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
+      } catch {}
+      return;
+    }
+
+    const allHistContent = [
+      ...userHistoryArr.map(m => m.content),
+      ...channelHistoryArr.map(m => m.content)
+    ];
+    const trivialCount = allHistContent.filter(isTrivialOrSafeMessage).length;
+    const totalCount = allHistContent.length;
+    if (totalCount > 0 && (trivialCount / totalCount) > 0.8) {
       try {
-        channelHistoryArr = await fetchChannelHistory(
-          msg.channel.id, msg.guildId, 7, thisMsgId
-        );
-      } catch (e) {
-        channelHistoryArr = null;
-        try { await msg.reply("All context is lost to the ether."); } catch {}
-      }
+        await msg.reply("Little of substance has been spoken here so far.");
+      } catch {}
+      return;
+    }
+    function botName() {
+      return Math.random() < 0.33 ? "Arbiter" : (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
+    }
+    const userHistory = userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n");
+    const channelHistory = channelHistoryArr.map(m => {
+      if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
+      if (m.user === msg.author.id) return `${m.displayName || m.username}: ${m.content}`;
+      if (m.user === client.user.id) return `${botName()}: ${m.content}`;
+      return `${m.displayName || m.username || "User"}: ${m.content}`;
+    }).join("\n");
+    const dateString = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
-      if (!userHistoryArr || !channelHistoryArr) {
-        try {
-          await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
-        } catch {}
-        return;
-      }
-
-            // -- Contextual triviality check: only proceed if enough substance
-      const allHistContent = [
-        ...userHistoryArr.map(m => m.content),
-        ...channelHistoryArr.map(m => m.content)
-      ];
-      const trivialCount = allHistContent.filter(isTrivialOrSafeMessage).length;
-      const totalCount = allHistContent.length;
-      if (totalCount > 0 && (trivialCount / totalCount) > 0.8) {
-        try {
-          await msg.reply("Little of substance has been spoken here so far.");
-        } catch {}
-        return;
-      }
-
-      function botName() {
-        return Math.random() < 0.33 ? "Arbiter" : (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
-      }
-
-      const userHistory = userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n");
-      const channelHistory = channelHistoryArr.map(m => {
-        if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
-        if (m.user === msg.author.id) return `${m.displayName || m.username}: ${m.content}`;
-        if (m.user === client.user.id) return `${botName()}: ${m.content}`;
-        return `${m.displayName || m.username || "User"}: ${m.content}`;
-      }).join("\n");
-      const dateString = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-
-      // ---- NEWS SECTION: Exa /search ----
-      let newsSection = "";
-      try {
-        const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
-        if (newsRegex.test(msg.content)) {
-          let topic = "world events";
-          const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
-          if (match) topic = match[2];
-          const results = await exaSearch(`latest news about ${topic}`, 5);
-          if (results && results.length) {
-            newsSection =
-              `Here are real-time news headlines for "${topic}":\n` +
-              results.map(r =>
-                `• [${r.title}](${r.url})\n  ${r.text ? r.text.slice(0, 200) : ''}`
-              ).join("\n");
-          } else {
-            newsSection = "No up-to-date news articles found for that topic.";
-          }
+    // ---- NEWS SECTION: Exa /search ----
+    let newsSection = "";
+    let sourcesUsed = [];
+    try {
+      const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
+      if (newsRegex.test(msg.content)) {
+        let topic = "world events";
+        const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
+        if (match) topic = match[2];
+        const results = await exaSearch(`latest news about ${topic}`, 5);
+        if (results && results.length) {
+          newsSection =
+            `Here are real-time news headlines for "${topic}":\n` +
+            results.map(r =>
+              `• [${r.title}](${r.url})\n  ${r.text ? r.text.slice(0, 200) : ''}`
+            ).join("\n");
+          sourcesUsed = results.map(r => r.url).filter(Boolean);
+        } else {
+          newsSection = "No up-to-date news articles found for that topic.";
         }
-      } catch (e) {
-        newsSection = `News search failed: \`${e.message}\``;
       }
-      // If this is a reply to a message (user or bot), treat it as the subject in the context
-      let referencedSection = "";
-      if (repliedToMsg) {
-        referencedSection =
-          `[referenced message]\nFrom: ${
-            repliedToMsg.member ? repliedToMsg.member.displayName : repliedToMsg.author.username
-          } (${repliedToMsg.author.username})\n${repliedToMsg.content}\n`;
-      }
+    } catch (e) {
+      newsSection = `News search failed: \`${e.message}\``;
+    }
+    // If this is a reply to a message (user or bot), treat it as the subject in the context
+    let referencedSection = "";
+    if (repliedToMsg) {
+      referencedSection =
+        `[referenced message]\nFrom: ${
+          repliedToMsg.member ? repliedToMsg.member.displayName : repliedToMsg.author.username
+        } (${repliedToMsg.author.username})\n${repliedToMsg.content}\n`;
+    }
 
-      const prompt = `
+          const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 Today is ${dateString}.
 Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
@@ -619,43 +665,61 @@ ${referencedSection}
 [reply]
 `;
 
-      let replyText;
-      try {
-        const { result } = await geminiUserFacing(prompt);
-        replyText = result;
-      } catch (e) {
-        replyText = "The Arbiter chooses silence.";
-        console.warn("Gemini user-facing error:", e);
-      }
-      try {
-        await msg.reply(replyText);
-      } catch (e) {
-        console.error("Discord reply failed:", e);
-      }
-      try {
-        const db = await connect();
-        await db.collection("messages").insertOne({
-          type: "message",
-          user: client.user.id,
-          username: client.user.username || "Arbiter",
-          displayName: "Arbiter",
-          channel: msg.channel.id,
-          channelName: getChannelName(msg),
-          guildId: msg.guildId,
-          guildName: getGuildName(msg),
-          isBot: true,
-          content: replyText,
-          ts: new Date(),
-        });
-      } catch (e) {
-        console.warn("DB insert error (bot reply):", e);
-      }
-    } catch (err) {
-      try {
-        await msg.reply("Nobody will help you.");
-      } catch {}
-      console.error("Gemini user-facing failed:", err);
+    let replyText;
+    try {
+      const { result } = await geminiUserFacing(prompt);
+      replyText = result;
+    } catch (e) {
+      replyText = "The Arbiter chooses silence.";
+      console.warn("Gemini user-facing error:", e);
     }
-  }
-});
+
+    // ==== Source-gathering logic for non-news answers ====
+    if (sourcesUsed.length === 0) {
+      try {
+        // Assume exaAnswer returns { answer, urls }:
+        let exaRes = await exaAnswer(msg.content);
+        if (exaRes && exaRes.urls && exaRes.urls.length) sourcesUsed = exaRes.urls;
+      } catch (e) {}
+    }
+
+    // ---- Send reply, platform source button if URLs exist ----
+    try {
+      if (sourcesUsed.length > 0) {
+        const replyMsg = await msg.reply({ content: replyText, components: [ makeSourcesButton(sourcesUsed, msg.id) ] });
+        latestSourcesByBotMsg.set(replyMsg.id, { urls: sourcesUsed, timestamp: Date.now() });
+      } else {
+        await msg.reply(replyText);
+      }
+    } catch (e) {
+      console.error("Discord reply failed:", e);
+    }
+
+    // ---- Log bot reply to Mongo ----
+    try {
+      const db = await connect();
+      await db.collection("messages").insertOne({
+        type: "message",
+        user: client.user.id,
+        username: client.user.username || "Arbiter",
+        displayName: "Arbiter",
+        channel: msg.channel.id,
+        channelName: getChannelName(msg),
+        guildId: msg.guildId,
+        guildName: getGuildName(msg),
+        isBot: true,
+        content: replyText,
+        ts: new Date(),
+      });
+    } catch (e) {
+      console.warn("DB insert error (bot reply):", e);
+    }
+
+  } catch (err) {
+    try {
+      await msg.reply("Nobody will help you.");
+    } catch {}
+    console.error("Gemini user-facing failed:", err);
+    }
+}});
 client.login(process.env.DISCORD_TOKEN);
