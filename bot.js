@@ -114,9 +114,12 @@ async function getDisplayNameById(userId, guild) {
   }
 }
 async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap) {
-  const replyMsg = await msg.reply({ ...replyOptions, components: [makeSourcesButton(sources, null)] });
-  replyMsg.components[0].components[0].setCustomId(`${SOURCE_BUTTON_ID}:${replyMsg.id}`);
-  await replyMsg.edit({ components: replyMsg.components });
+  const replyMsg = await msg.reply({
+    ...replyOptions,
+    components: [makeSourcesButton(sources, null)]
+  });
+  const buttonComponent = makeSourcesButton(sources, replyMsg.id);
+  await replyMsg.edit({ components: [buttonComponent] });
   sourceMap.set(replyMsg.id, { urls: sources, timestamp: Date.now() });
   return replyMsg;
 }
