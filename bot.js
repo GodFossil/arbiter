@@ -113,8 +113,15 @@ async function getDisplayNameById(userId, guild) {
     return userId;
   }
 }
+async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap) {
+  const replyMsg = await msg.reply({ ...replyOptions, components: [makeSourcesButton(sources, null)] });
+  replyMsg.components[0].components[0].setCustomId(`${SOURCE_BUTTON_ID}:${replyMsg.id}`);
+  await replyMsg.edit({ components: replyMsg.components });
+  sourceMap.set(replyMsg.id, { urls: sources, timestamp: Date.now() });
+  return replyMsg;
+}
 function cleanUrl(url) {
-  return url.replace(/[)\].,;:!?]+$/g, '');
+  return url.trim().replace(/[)\].,;:!?]+$/g, '');
 }
 
 // ---- HISTORY UTILS ----
@@ -689,22 +696,19 @@ ${referencedSection}
     }
 
     // ---- Send reply, platform source button if URLs exist ----
-        console.log('[DEBUG] sourcesUsed:', sourcesUsed);
-      try {
-         const filteredSources = sourcesUsed
-        .map(u => cleanUrl(u))
-        .filter(u => typeof u === "string" && u.startsWith("http"));
-        if (filteredSources.length > 0) {
-        const replyMsg = await msg.reply({ content: replyText, components: [] });
-        const sourceButton = makeSourcesButton(filteredSources, replyMsg.id);
-        await replyMsg.edit({ components: [sourceButton] });
-        latestSourcesByBotMsg.set(replyMsg.id, { urls: filteredSources, timestamp: Date.now() });
-      } else {
-        await msg.reply(replyText);
-    }
-    } catch (e) {
-      console.error("Discord reply failed:", e);
-    }
+    console.log('[DEBUG] sourcesUsed:', sourcesUsed);
+try {
+  const filteredSources = sourcesUsed
+    .map(u => cleanUrl(u))
+    .filter(u => typeof u === "string" && u.startsWith("http"));
+  if (filteredSources.length > 0) {
+    await replyWithSourcesButton(msg, { content: replyText }, filteredSources, latestSourcesByBotMsg);
+  } else {
+    await msg.reply(replyText);
+  }
+} catch (e) {
+  console.error("Discord reply failed:", e);
+}
 
     // ---- Log bot reply to Mongo ----
     try {
