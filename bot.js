@@ -688,7 +688,9 @@ ${referencedSection}
     try {
         const filteredSources = sourcesUsed.filter(u => typeof u === "string" && u.startsWith("http"));
         if (filteredSources.length > 0) {
-        const replyMsg = await msg.reply({ content: replyText, components: [ makeSourcesButton(filteredSources, msg.id) ] });
+        const replyMsg = await msg.reply({ content: replyText, components: [] });
+        const sourceButton = makeSourcesButton(filteredSources, replyMsg.id);
+        await replyMsg.edit({ components: [sourceButton] });
         latestSourcesByBotMsg.set(replyMsg.id, { urls: filteredSources, timestamp: Date.now() });
     }   else {
         await msg.reply(replyText);
