@@ -701,7 +701,7 @@ ${referencedSection}
     // ---- Send reply, platform source button if URLs exist ----
     console.log('[DEBUG] sourcesUsed:', sourcesUsed);
 try {
-  const filteredSources = sourcesUsed
+  filteredSources = sourcesUsed
     .map(u => cleanUrl(u))
     .filter(u => typeof u === "string" && u.startsWith("http"));
   if (filteredSources.length > 0) {
