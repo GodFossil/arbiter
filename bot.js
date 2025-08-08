@@ -180,7 +180,7 @@ function makeSourcesButton(sourceArray, msgId) {
     new ButtonBuilder()
       .setCustomId(`${SOURCE_BUTTON_ID}:${msgId}`)
       .setLabel('\u{1D48A}')
-      .setStyle(ButtonStyle.Secondary)
+      .setStyle(ButtonStyle.Primary)
       .setDisabled(!sourceArray || sourceArray.length === 0)
   ]);
 }
