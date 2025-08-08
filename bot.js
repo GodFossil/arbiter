@@ -114,13 +114,18 @@ async function getDisplayNameById(userId, guild) {
   }
 }
 async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap) {
+  // Generate a unique ID for this button interaction
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
   const replyMsg = await msg.reply({
     ...replyOptions,
-    components: [makeSourcesButton(sources, null)]
+    components: [makeSourcesButton(sources, uniqueId)]
   });
-  const buttonComponent = makeSourcesButton(sources, replyMsg.id);
-  await replyMsg.edit({ components: [buttonComponent] });
+  
+  // Map both the unique ID and the Discord message ID to the sources
+  sourceMap.set(uniqueId, { urls: sources, timestamp: Date.now() });
   sourceMap.set(replyMsg.id, { urls: sources, timestamp: Date.now() });
+  
   return replyMsg;
 }
 function cleanUrl(url) {
@@ -483,8 +488,9 @@ client.on('interactionCreate', async interaction => {
   if (interaction.type !== InteractionType.MessageComponent) return;
   if (!interaction.customId.startsWith(SOURCE_BUTTON_ID)) return;
 
-  const msgId = interaction.customId.split(':')[1];
-  const sources = latestSourcesByBotMsg.get(msgId);
+  const buttonId = interaction.customId.split(':')[1];
+  // Try both the button ID and the message ID (for backwards compatibility)
+  let sources = latestSourcesByBotMsg.get(buttonId) || latestSourcesByBotMsg.get(interaction.message.id);
 
   if (!sources) {
     await interaction.reply({ content: "No source information found for this message.", flags: MessageFlags.Ephemeral });
