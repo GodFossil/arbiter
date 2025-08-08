@@ -187,11 +187,48 @@ function makeSourcesButton(sourceArray, msgId) {
 
 let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
 
-setInterval(() => {
+setInterval(async () => {
   // Clean up after 1 hour
   const cutoff = Date.now() - 3600 * 1000;
-  for (const [msgId, obj] of latestSourcesByBotMsg.entries()) {
-    if (obj.timestamp < cutoff) latestSourcesByBotMsg.delete(msgId);
+  const expiredEntries = [];
+  
+  for (const [id, obj] of latestSourcesByBotMsg.entries()) {
+    if (obj.timestamp < cutoff) {
+      expiredEntries.push(id);
+    }
+  }
+  
+  // Disable buttons for expired Discord message IDs (not unique button IDs)
+  for (const id of expiredEntries) {
+    // Discord message IDs are snowflakes (17-19 digits), our unique IDs contain dashes
+    if (/^\d{17,19}$/.test(id)) {
+      try {
+        // Try to find the message across all cached channels
+        let foundMessage = null;
+        for (const [_, channel] of client.channels.cache) {
+          if (channel.messages) {
+            try {
+              foundMessage = await channel.messages.fetch(id);
+              if (foundMessage) break;
+            } catch (e) {
+              // Message not in this channel, continue searching
+              continue;
+            }
+          }
+        }
+        
+        if (foundMessage && foundMessage.components && foundMessage.components.length > 0) {
+          // Remove the button completely by setting components to empty array
+          await foundMessage.edit({ components: [] });
+        }
+      } catch (e) {
+        // Message might be deleted or bot lacks permissions - silently continue
+        console.warn(`Failed to disable button for message ${id}:`, e.message);
+      }
+    }
+    
+    // Remove from map regardless of button disable success
+    latestSourcesByBotMsg.delete(id);
   }
 }, 10 * 60 * 1000);
 
