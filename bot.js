@@ -480,19 +480,21 @@ ${mainContent}
         ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
         : msg.content;
     const answer = await exaAnswer(mainContent);
+    console.log(`[DEBUG] Exa answer for "${mainContent}":`, answer);
 
     // Do not check LLM if Exa answer is missing/empty/meaningless
-    if (!answer || answer.trim() === "" || /no relevant results|no results/i.test(answer)) {
+    if (!answer || answer.answer.trim() === "" || /no relevant results|no results/i.test(answer.answer)) {
+      console.log(`[DEBUG] Skipping LLM check - Exa returned no useful context`);
       return { contradiction, misinformation: null };
     }
 
     const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
-You are a careful fact-checking assistant.
+You are a strict fact-checking assistant with zero tolerance for false claims.
 Does the [User message] contain misinformation according to the [Web context]?
 Always reply in strict JSON of the form:
 {"misinformation":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
-- "misinformation": Use "yes" if the user's message contains critical misinformation; otherwise use "no".
+- "misinformation": Use "yes" if the user's message contains ANY false, debunked, or scientifically disproven claims; otherwise use "no". Be strict - even common misconceptions should be flagged as "yes".
 - "reason": For "yes", state precisely what makes the message false or misinformative. For "no", explain why: e.g. it is accurate, factual, a joke, off-topic, or unfalsifiable. If web context is missing or inconclusive, state so.
 - "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the contents of the user message. The quote or summary must be supported by the contents of the provided "url". For "no", use an empty string.
 - "url": For "yes", include the URL that contains the corroborating source material of the provided evidence. For "no", use an empty string.
@@ -500,7 +502,7 @@ In all cases, never reply with non-JSON or leave any field out. If you can't fin
 [User message]
 ${msg.content}
 [Web context]
-${answer}
+${answer.answer}
 `.trim();
     try {
       const { result } = await aiFactCheckFlash(misinfoPrompt);
@@ -595,10 +597,12 @@ client.on("messageCreate", async (msg) => {
 
   // ============ BACKGROUND DETECTION =============
   if (msg.content.length <= MAX_FACTCHECK_CHARS) {
+    console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
     (async () => {
       let detection = null;
       try {
         detection = await detectContradictionOrMisinformation(msg);
+        console.log(`[DEBUG] Detection result:`, detection);
       } catch (e) {
         console.warn("Detection failure (silent to user):", e);
       }
