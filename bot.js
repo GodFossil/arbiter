@@ -511,8 +511,8 @@ Always reply in strict JSON of the form:
   * Scientifically harmful (flat earth, climate denial with policy implications)
   * Falsified conspiratorial claims that can be definitively debunked with evidence (e.g. claims about public figures that contradict documented facts)
   * Deliberately deceptive with serious consequences
-  Use "no" for minor inaccuracies, debatable topics, opinions, jokes, non-harmful misconceptions, or unfalsified conspiracy theories that remain plausible/unprovable.
-- "reason": For "yes", state precisely what makes the message critically false and potentially harmful. For "no", explain why: e.g. it is accurate, minor inaccuracy, opinion, joke, or not critically harmful.
+  Use "no" for contested/debated claims (even if you disagree), minor inaccuracies, nuanced disagreements, opinions, jokes, non-harmful misconceptions, or unfalsified conspiracy theories. The claim must be DEFINITIVELY and UNAMBIGUOUSLY proven false by the evidence - not just disputed or contested.
+- "reason": For "yes", state precisely what makes the message critically false, definitively debunked, and potentially harmful. For "no", explain why: e.g. it is accurate, contested but not definitively false, minor inaccuracy, opinion, joke, or not critically harmful.
 - "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the harmful claim. For "no", use an empty string.
 - "url": For "yes", include the URL that contains the corroborating source material. For "no", use an empty string.
 In all cases, never reply with non-JSON or leave any field out. If you can't find suitable evidence or the claim isn't critically harmful, respond "misinformation":"no".
