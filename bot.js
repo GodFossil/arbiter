@@ -502,15 +502,19 @@ ${mainContent}
 
     const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
-You are a strict fact-checking assistant with zero tolerance for false claims.
-Does the [User message] contain misinformation according to the [Web context]?
+You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.
+Does the [User message] contain dangerous misinformation according to the [Web context]?
 Always reply in strict JSON of the form:
 {"misinformation":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
-- "misinformation": Use "yes" if the user's message contains ANY false, debunked, or scientifically disproven claims; otherwise use "no". Be strict - even common misconceptions should be flagged as "yes".
-- "reason": For "yes", state precisely what makes the message false or misinformative. For "no", explain why: e.g. it is accurate, factual, a joke, off-topic, or unfalsifiable. If web context is missing or inconclusive, state so.
-- "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the contents of the user message. The quote or summary must be supported by the contents of the provided "url". For "no", use an empty string.
-- "url": For "yes", include the URL that contains the corroborating source material of the provided evidence. For "no", use an empty string.
-In all cases, never reply with non-JSON or leave any field out. If you can't find any suitable evidence, respond "misinformation":"no".
+- "misinformation": Use "yes" ONLY if the user's message contains CRITICAL misinformation that is:
+  * Medically dangerous (false health/vaccine claims, dangerous treatments)
+  * Scientifically harmful (flat earth, climate denial with policy implications)
+  * Deliberately deceptive with serious consequences
+  Use "no" for minor inaccuracies, debatable topics, opinions, jokes, or non-harmful misconceptions.
+- "reason": For "yes", state precisely what makes the message critically false and potentially harmful. For "no", explain why: e.g. it is accurate, minor inaccuracy, opinion, joke, or not critically harmful.
+- "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the harmful claim. For "no", use an empty string.
+- "url": For "yes", include the URL that contains the corroborating source material. For "no", use an empty string.
+In all cases, never reply with non-JSON or leave any field out. If you can't find suitable evidence or the claim isn't critically harmful, respond "misinformation":"no".
 [User message]
 ${msg.content}
 [Web context]
@@ -630,12 +634,18 @@ client.on("messageCreate", async (msg) => {
             (evidenceUrl ? `\n[Jump to message](${evidenceUrl})` : "")
           );
         } else if (detection.misinformation && detection.misinformation.misinformation === "yes") {
-          await msg.reply(
+          const misinfoReply = 
             `🚩 **MISINFORMATION DETECTED** 🚩\n` +
             `Reason: ${detection.misinformation.reason}\n` +
-            (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}\n` : "") +
-            (detection.misinformation.url ? `Source: ${detection.misinformation.url}` : "")
-          );
+            (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}` : "");
+          
+          const sourcesForButton = detection.misinformation.url ? [detection.misinformation.url] : [];
+          
+          if (sourcesForButton.length > 0) {
+            await replyWithSourcesButton(msg, { content: misinfoReply }, sourcesForButton, latestSourcesByBotMsg);
+          } else {
+            await msg.reply(misinfoReply);
+          }
         }
       }
     })();
