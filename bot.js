@@ -411,8 +411,7 @@ async function detectContradictionOrMisinformation(msg) {
     .toArray();
 
   const priorSubstantive = userMessages.filter(m => !isTrivialOrSafeMessage(m.content));
-  if (priorSubstantive.length === 0) return { contradiction: null, misinformation: null };
-
+  
   // Duplicate detection: skip if new message matches last substantive message
   if (priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim()) {
     return { contradiction: null, misinformation: null };
@@ -473,7 +472,9 @@ ${mainContent}
       console.warn("Contradiction detection error:", e);
     }
   }
-    // ---- MISINFORMATION CHECK ----
+  
+  // ---- MISINFORMATION CHECK ----
+  console.log(`[DEBUG] Contradiction result: ${contradiction ? 'FOUND' : 'NONE'}, proceeding to misinformation check`);
   if (!contradiction) {
     const mainContent =
       msg.content.length > MAX_FACTCHECK_CHARS
