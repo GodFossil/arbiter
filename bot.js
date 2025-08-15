@@ -744,9 +744,9 @@ ${referencedSection}
     // ---- Send reply, platform source button if URLs exist ----
     console.log('[DEBUG] sourcesUsed:', sourcesUsed);
 try {
-  filteredSources = sourcesUsed
+  filteredSources = [...new Set(sourcesUsed
     .map(u => cleanUrl(u))
-    .filter(u => typeof u === "string" && u.startsWith("http"));
+    .filter(u => typeof u === "string" && u.startsWith("http")))];
   if (filteredSources.length > 0) {
     await replyWithSourcesButton(msg, { content: replyText }, filteredSources, latestSourcesByBotMsg);
   } else {
