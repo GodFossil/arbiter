@@ -629,12 +629,12 @@ client.on("messageCreate", async (msg) => {
             `Reason: ${detection.reason}` +
             (evidenceUrl ? `\n[Jump to message](${evidenceUrl})` : "")
           );
-        } else if (detection.misinformation && detection.misinformation === "yes") {
+        } else if (detection.misinformation && detection.misinformation.misinformation === "yes") {
           await msg.reply(
             `🚩 **MISINFORMATION DETECTED** 🚩\n` +
-            `Reason: ${detection.reason}\n` +
-            (detection.evidence ? `Evidence: ${detection.evidence}\n` : "") +
-            (detection.url ? `Source: ${detection.url}` : "")
+            `Reason: ${detection.misinformation.reason}\n` +
+            (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}\n` : "") +
+            (detection.misinformation.url ? `Source: ${detection.misinformation.url}` : "")
           );
         }
       }
