@@ -522,6 +522,11 @@ ${answer}
 // ------ DISCORD BOT EVENT HANDLER ------
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}!`);
+  console.log(`[DEBUG] Bot ready. Required env vars check:`);
+  console.log(`- DISCORD_TOKEN: ${process.env.DISCORD_TOKEN ? 'SET' : 'MISSING'}`);
+  console.log(`- DO_AI_API_KEY: ${process.env.DO_AI_API_KEY ? 'SET' : 'MISSING'}`);
+  console.log(`- MONGODB_URI: ${process.env.MONGODB_URI ? 'SET' : 'MISSING'}`);
+  console.log(`- EXA_API_KEY: ${process.env.EXA_API_KEY ? 'SET' : 'MISSING'}`);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -622,6 +627,7 @@ client.on("messageCreate", async (msg) => {
 
   // ---- USER-FACING REPLIES ----
   if (isMentioned || isReplyToBot) {
+    console.log(`[DEBUG] Bot mentioned or replied to. Processing reply...`);
   try {
     await msg.channel.sendTyping();
     let userHistoryArr = null, channelHistoryArr = null;

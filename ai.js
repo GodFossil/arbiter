@@ -3,8 +3,16 @@ const DO_AI_URL = 'https://inference.do-ai.run/v1/chat/completions';
 const DO_AI_KEY = process.env.DO_AI_API_KEY;
 
 async function doAIRequest(prompt, modelNames, temperature = 0.7, maxTokens = 2048) {
+  // Check if API key is set
+  if (!DO_AI_KEY) {
+    throw new Error("DO_AI_API_KEY environment variable not set");
+  }
+  
+  console.log(`[AI] Attempting request with models: ${modelNames.join(', ')}`);
+  
   for (const model of modelNames) {
     try {
+      console.log(`[AI] Trying model: ${model}`);
       const res = await axios.post(
         DO_AI_URL,
         {
@@ -22,9 +30,14 @@ async function doAIRequest(prompt, modelNames, temperature = 0.7, maxTokens = 20
       );
       
       const text = res.data.choices?.[0]?.message?.content;
-      if (text) return { result: text, modelUsed: model };
+      if (text) {
+        console.log(`[AI] Success with model: ${model}`);
+        return { result: text, modelUsed: model };
+      } else {
+        console.warn(`[AI] Model ${model} returned empty response`);
+      }
     } catch (err) {
-      console.warn(`Model ${model} failed:`, err.message);
+      console.warn(`[AI] Model ${model} failed:`, err.response?.data || err.message);
       if (model === modelNames[modelNames.length - 1]) throw err;
     }
   }
