@@ -46,16 +46,16 @@ async function doAIRequest(prompt, modelNames, temperature = 0.7, maxTokens = 20
 
 // User-Facing Replies
 exports.aiUserFacing = (prompt) =>
-  doAIRequest(prompt, ['openai-gpt-5', 'anthropic-claude-3.7-sonnet'], 0.8, 2048);
+  doAIRequest(prompt, ['gpt-4o', 'gpt-4o-mini'], 0.8, 2048);
 
 // Background tasks (Contradiction Detection)
 exports.aiBackground = (prompt) =>
-  doAIRequest(prompt, ['openai-gpt-4o-mini', 'llama3.3-70b-instruct'], 0.3, 1024);
+  doAIRequest(prompt, ['gpt-4o-mini', 'gpt-3.5-turbo'], 0.3, 1024);
 
 // Summarization/Memory Pruning
 exports.aiSummarization = (prompt) =>
-  doAIRequest(prompt, ['anthropic-claude-3.5-haiku', 'mistral-nemo-instruct-2407'], 0.5, 1024);
+  doAIRequest(prompt, ['gpt-4o-mini', 'gpt-3.5-turbo'], 0.5, 1024);
 
 // News & Fact-Checking Queries
 exports.aiFactCheck = (prompt) =>
-  doAIRequest(prompt, ['openai-gpt-4o', 'deepseek-r1-distill-llama-70b'], 0.3, 1536);
+  doAIRequest(prompt, ['gpt-4o', 'gpt-4o-mini'], 0.3, 1536);
