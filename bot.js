@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
 const { connect } = require("./mongo");
-const { geminiUserFacing, geminiBackground } = require("./gemini");
+const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
 const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -293,7 +293,7 @@ Summary:
 `.trim();
       let summary = "";
       try {
-        const { result } = await geminiBackground(summaryPrompt);
+        const { result } = await aiSummarization(summaryPrompt);
         summary = result;
       } catch (e) {
         summary = "[failed to summarize]";
@@ -378,9 +378,12 @@ async function exaSearch(query, numResults = 5) {
   }
 }
 
-// ---- GEMINI UTILS ----
-async function geminiFlash(prompt) {
-  return await geminiBackground(prompt);
+// ---- AI UTILS ----
+async function aiFlash(prompt) {
+  return await aiBackground(prompt);
+}
+async function aiFactCheckFlash(prompt) {
+  return await aiFactCheck(prompt);
 }
 
 // ---- DETECTION LOGIC ----
@@ -446,7 +449,7 @@ ${concatenated}
 ${mainContent}
 `.trim();
     try {
-      const { result } = await geminiFlash(contradictionPrompt);
+      const { result } = await aiFlash(contradictionPrompt);
       let parsed = null;
       try {
         const match = result.match(/\{[\s\S]*?\}/);
@@ -500,7 +503,7 @@ ${msg.content}
 ${answer}
 `.trim();
     try {
-      const { result } = await geminiFlash(misinfoPrompt);
+      const { result } = await aiFactCheckFlash(misinfoPrompt);
       let parsed = null;
       try {
         const match = result.match(/\{[\s\S]*?\}/);
@@ -725,11 +728,11 @@ ${referencedSection}
 
     let replyText;
     try {
-      const { result } = await geminiUserFacing(prompt);
+      const { result } = await aiUserFacing(prompt);
       replyText = result;
     } catch (e) {
       replyText = "The Arbiter chooses silence.";
-      console.warn("Gemini user-facing error:", e);
+      console.warn("AI user-facing error:", e);
     }
 
     // ==== Source-gathering logic for non-news answers ====
@@ -780,7 +783,7 @@ try {
     try {
       await msg.reply("Nobody will help you.");
     } catch {}
-    console.error("Gemini user-facing failed:", err);
+    console.error("AI user-facing failed:", err);
     }
 }});
 client.login(process.env.DISCORD_TOKEN);
