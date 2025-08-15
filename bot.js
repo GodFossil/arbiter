@@ -392,8 +392,15 @@ async function detectContradictionOrMisinformation(msg) {
   let contradictionEvidenceUrl = "";
   let misinformation = null;
 
+  console.log(`[DEBUG] Starting detection for: "${msg.content}"`);
+  
   // Trivial message & other bot command skip for contradiction/misinformation:
-  if (isTrivialOrSafeMessage(msg.content) || isOtherBotCommand(msg.content)) {
+  const isTrivial = isTrivialOrSafeMessage(msg.content);
+  const isBotCommand = isOtherBotCommand(msg.content);
+  console.log(`[DEBUG] Message filters - Trivial: ${isTrivial}, Bot Command: ${isBotCommand}`);
+  
+  if (isTrivial || isBotCommand) {
+    console.log(`[DEBUG] Skipping detection - message filtered out`);
     return { contradiction: null, misinformation: null };
   }
 
@@ -414,8 +421,12 @@ async function detectContradictionOrMisinformation(msg) {
   
   // Duplicate detection: skip if new message matches last substantive message
   if (priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim()) {
+    console.log(`[DEBUG] Skipping detection - duplicate message detected`);
     return { contradiction: null, misinformation: null };
   }
+  
+  console.log(`[DEBUG] Passed all filters, proceeding with detection logic`);
+  console.log(`[DEBUG] Prior substantive messages: ${priorSubstantive.length}`);
 
   // ---- CONTRADICTION CHECK ----
   if (priorSubstantive.length > 0) {
