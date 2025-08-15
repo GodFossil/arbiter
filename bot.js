@@ -419,17 +419,17 @@ async function detectContradictionOrMisinformation(msg) {
 
   const priorSubstantive = userMessages.filter(m => !isTrivialOrSafeMessage(m.content));
   
-  // Duplicate detection: skip if new message matches last substantive message
-  if (priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim()) {
-    console.log(`[DEBUG] Skipping detection - duplicate message detected`);
-    return { contradiction: null, misinformation: null };
+  // Duplicate detection: skip contradiction check for duplicates, but still check misinformation
+  const isDuplicate = priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim();
+  if (isDuplicate) {
+    console.log(`[DEBUG] Duplicate message detected - skipping contradiction check but proceeding with misinformation check`);
   }
   
   console.log(`[DEBUG] Passed all filters, proceeding with detection logic`);
   console.log(`[DEBUG] Prior substantive messages: ${priorSubstantive.length}`);
 
   // ---- CONTRADICTION CHECK ----
-  if (priorSubstantive.length > 0) {
+  if (priorSubstantive.length > 0 && !isDuplicate) {
     const concatenated = priorSubstantive
       .map(m =>
         m.content.length > MAX_FACTCHECK_CHARS
