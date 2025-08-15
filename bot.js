@@ -509,8 +509,9 @@ Always reply in strict JSON of the form:
 - "misinformation": Use "yes" ONLY if the user's message contains CRITICAL misinformation that is:
   * Medically dangerous (false health/vaccine claims, dangerous treatments)
   * Scientifically harmful (flat earth, climate denial with policy implications)
+  * Falsified conspiratorial claims that can be definitively debunked with evidence (e.g. claims about public figures that contradict documented facts)
   * Deliberately deceptive with serious consequences
-  Use "no" for minor inaccuracies, debatable topics, opinions, jokes, or non-harmful misconceptions.
+  Use "no" for minor inaccuracies, debatable topics, opinions, jokes, non-harmful misconceptions, or unfalsified conspiracy theories that remain plausible/unprovable.
 - "reason": For "yes", state precisely what makes the message critically false and potentially harmful. For "no", explain why: e.g. it is accurate, minor inaccuracy, opinion, joke, or not critically harmful.
 - "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the harmful claim. For "no", use an empty string.
 - "url": For "yes", include the URL that contains the corroborating source material. For "no", use an empty string.
