@@ -503,15 +503,16 @@ ${mainContent}
     const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.
-Does the [User message] contain dangerous misinformation according to the [Web context]?
+Does the [User message] contain dangerous misinformation that the user is personally making, asserting, or endorsing according to the [Web context]?
+IMPORTANT: Only flag messages where the user is directly claiming or promoting false information. Do NOT flag messages where the user is merely reporting what others say, expressing uncertainty, rejecting false claims, or discussing misinformation without endorsing it.
 Always reply in strict JSON of the form:
 {"misinformation":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
-- "misinformation": Use "yes" ONLY if the user's message contains CRITICAL misinformation that is:
+- "misinformation": Use "yes" ONLY if the user is personally asserting/claiming/endorsing CRITICAL misinformation that is:
   * Medically dangerous (false health/vaccine claims, dangerous treatments)
-  * Scientifically harmful (flat earth, climate denial with policy implications)
+  * Scientifically harmful (flat earth, climate denial with policy implications)  
   * Falsified conspiratorial claims that can be definitively debunked with evidence (e.g. claims about public figures that contradict documented facts)
   * Deliberately deceptive with serious consequences
-  Use "no" for contested/debated claims (even if you disagree), minor inaccuracies, nuanced disagreements, opinions, jokes, non-harmful misconceptions, or unfalsified conspiracy theories. The claim must be DEFINITIVELY and UNAMBIGUOUSLY proven false by the evidence - not just disputed or contested.
+  Use "no" for: reporting what others say ("people say X"), expressing uncertainty ("I don't know if X"), rejecting false claims ("X is just a conspiracy theory"), academic discussion of misinformation, contested/debated claims, minor inaccuracies, nuanced disagreements, opinions, jokes, or unfalsified conspiracy theories. The user must be ACTIVELY PROMOTING false information, and it must be DEFINITIVELY and UNAMBIGUOUSLY proven false by the evidence.
 - "reason": For "yes", state precisely what makes the message critically false, definitively debunked, and potentially harmful. For "no", explain why: e.g. it is accurate, contested but not definitively false, minor inaccuracy, opinion, joke, or not critically harmful.
 - "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the harmful claim. For "no", use an empty string.
 - "url": For "yes", include the URL that contains the corroborating source material. For "no", use an empty string.
