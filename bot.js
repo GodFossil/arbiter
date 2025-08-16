@@ -57,14 +57,22 @@ function isTrivialOrSafeMessage(content) {
   if (!content || typeof content !== "string") return true;
   const safe = [
     "hello", "hi", "hey", "ok", "okay", "yes", "no", "lol", "sure", "cool", "nice", "thanks",
-    "thank you", "hey arbiter", "sup", "idk", "good morning", "good night"
+    "thank you", "hey arbiter", "sup", "idk", "good morning", "good night", "haha", "lmao",
+    "brb", "ttyl", "gtg", "omg", "wtf", "tbh", "imo", "ngl", "fr", "bet", "facts", "cap",
+    "no cap", "word", "mood", "same", "this", "that", "what", "who", "when", "where", "why"
   ];
   const onlyEmoji = /^[\W_]+$/u;
+  const onlyPunctuation = /^[.!?,:;]+$/;
+  const repeatedChars = /^(.)\1{2,}$/; // Like "aaa", "!!!", "???"
+  
   const trimmed = content.trim().toLowerCase();
   return (
     safe.includes(trimmed)
     || onlyEmoji.test(content)
+    || onlyPunctuation.test(content)
+    || repeatedChars.test(trimmed)
     || trimmed.length < 4
+    || /^[a-z]{1,3}$/.test(trimmed) // Single letters or very short acronyms
   );
 }
 function isOtherBotCommand(content) {
@@ -173,8 +181,9 @@ async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId =
   return result;
 }
 
-// Source button logic
+// Button logic  
 const SOURCE_BUTTON_ID = "arbiter-show-sources";
+const JUMP_BUTTON_ID = "arbiter-jump-message";
 
 function makeSourcesButton(sourceArray, msgId) {
   return new ActionRowBuilder().addComponents([
@@ -183,6 +192,16 @@ function makeSourcesButton(sourceArray, msgId) {
       .setLabel('\u{1D48A}')
       .setStyle(ButtonStyle.Primary)
       .setDisabled(!sourceArray || sourceArray.length === 0)
+  ]);
+}
+
+function makeJumpButton(jumpUrl) {
+  return new ActionRowBuilder().addComponents([
+    new ButtonBuilder()
+      .setCustomId(`${JUMP_BUTTON_ID}:${encodeURIComponent(jumpUrl)}`)
+      .setLabel('')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🔗')
   ]);
 }
 
@@ -416,7 +435,7 @@ async function detectContradictionOrMisinformation(msg) {
       discordMessageId: { $ne: msg.id }
     })
     .sort({ ts: -1 })
-    .limit(20)
+    .limit(50)
     .toArray();
 
   const priorSubstantive = userMessages.filter(m => !isTrivialOrSafeMessage(m.content));
@@ -562,22 +581,32 @@ client.once("ready", () => {
 
 client.on('interactionCreate', async interaction => {
   if (interaction.type !== InteractionType.MessageComponent) return;
-  if (!interaction.customId.startsWith(SOURCE_BUTTON_ID)) return;
+  
+  // Handle source buttons
+  if (interaction.customId.startsWith(SOURCE_BUTTON_ID)) {
+    const buttonId = interaction.customId.split(':')[1];
+    let sources = latestSourcesByBotMsg.get(buttonId) || latestSourcesByBotMsg.get(interaction.message.id);
 
-  const buttonId = interaction.customId.split(':')[1];
-  // Try both the button ID and the message ID (for backwards compatibility)
-  let sources = latestSourcesByBotMsg.get(buttonId) || latestSourcesByBotMsg.get(interaction.message.id);
-
-  if (!sources) {
-    await interaction.reply({ content: "No source information found for this message.", flags: MessageFlags.Ephemeral });
+    if (!sources) {
+      await interaction.reply({ content: "No source information found for this message.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!sources.urls || !sources.urls.length) {
+      await interaction.reply({ content: "No URLs were referenced in this response.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const resp = `**Sources referenced:**\n` + sources.urls.map(u => `<${u}>`).join('\n');
+    await interaction.reply({ content: resp, flags: MessageFlags.Ephemeral });
     return;
   }
-  if (!sources.urls || !sources.urls.length) {
-    await interaction.reply({ content: "No URLs were referenced in this response.", flags: MessageFlags.Ephemeral });
+  
+  // Handle jump buttons
+  if (interaction.customId.startsWith(JUMP_BUTTON_ID)) {
+    const encodedUrl = interaction.customId.split(':')[1];
+    const jumpUrl = decodeURIComponent(encodedUrl);
+    await interaction.reply({ content: `[Jump to contradictory message](${jumpUrl})`, flags: MessageFlags.Ephemeral });
     return;
   }
-  const resp = `**Sources referenced:**\n` + sources.urls.map(u => `<${u}>`).join('\n');
-  await interaction.reply({ content: resp, flags: MessageFlags.Ephemeral });
 });
 
 client.on("messageCreate", async (msg) => {
@@ -636,16 +665,24 @@ client.on("messageCreate", async (msg) => {
         console.warn("Detection failure (silent to user):", e);
       }
       if (detection) {
-        // CONTRADICTION DETECTED (with jump link if present)
+        // CONTRADICTION DETECTED (with jump button if present)
         if (detection.contradiction && detection.contradiction.contradiction === "yes") {
-          let evidenceUrl = detection.contradiction.url || "";
-          await msg.reply(
+          const contradictionReply = 
             `⚡ **CONTRADICTION DETECTED** ⚡\n` +
             `This message contradicts a prior statement you made:\n` +
             `> ${detection.contradiction.evidence}\n` +
-            `Reason: ${detection.contradiction.reason}` +
-            (evidenceUrl ? `\n[Jump to message](${evidenceUrl})` : "")
-          );
+            `Reason: ${detection.contradiction.reason}`;
+          
+          const evidenceUrl = detection.contradiction.url || "";
+          
+          if (evidenceUrl) {
+            await msg.reply({
+              content: contradictionReply,
+              components: [makeJumpButton(evidenceUrl)]
+            });
+          } else {
+            await msg.reply(contradictionReply);
+          }
         } else if (detection.misinformation && detection.misinformation.misinformation === "yes") {
           const misinfoReply = 
             `🚩 **MISINFORMATION DETECTED** 🚩\n` +
@@ -672,7 +709,7 @@ client.on("messageCreate", async (msg) => {
     let userHistoryArr = null, channelHistoryArr = null;
     try {
       userHistoryArr = await fetchUserHistory(
-        msg.author.id, msg.channel.id, msg.guildId, 5, thisMsgId
+        msg.author.id, msg.channel.id, msg.guildId, 10, thisMsgId
       );
     } catch (e) {
       userHistoryArr = null;
@@ -680,7 +717,7 @@ client.on("messageCreate", async (msg) => {
     }
     try {
       channelHistoryArr = await fetchChannelHistory(
-        msg.channel.id, msg.guildId, 7, thisMsgId
+        msg.channel.id, msg.guildId, 15, thisMsgId
       );
     } catch (e) {
       channelHistoryArr = null;

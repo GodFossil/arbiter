@@ -62,6 +62,8 @@ NOT misinformation (do not flag):
 `.trim();
 
 function getLogicalContext(contextType = 'general') {
+  console.log(`[LOGIC] Injecting logical principles - context: ${contextType}`);
+  
   const contexts = {
     general: LOGICAL_PRINCIPLES,
     contradiction: `${LOGICAL_PRINCIPLES}\n\n${CONTRADICTION_PRINCIPLES}`,
