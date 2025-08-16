@@ -196,9 +196,13 @@ function makeSourcesButton(sourceArray, msgId) {
 }
 
 function makeJumpButton(jumpUrl) {
+  // Generate a short ID and store the URL in the map
+  const jumpId = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+  jumpMessageMap.set(jumpId, { url: jumpUrl, timestamp: Date.now() });
+  
   return new ActionRowBuilder().addComponents([
     new ButtonBuilder()
-      .setCustomId(`${JUMP_BUTTON_ID}:${encodeURIComponent(jumpUrl)}`)
+      .setCustomId(`${JUMP_BUTTON_ID}:${jumpId}`)
       .setLabel('')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('🔗')
@@ -206,6 +210,7 @@ function makeJumpButton(jumpUrl) {
 }
 
 let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
+let jumpMessageMap = new Map(); // jumpId -> { url, timestamp }
 
 setInterval(async () => {
   // Clean up after 1 hour
@@ -249,6 +254,13 @@ setInterval(async () => {
     
     // Remove from map regardless of button disable success
     latestSourcesByBotMsg.delete(id);
+  }
+  
+  // Also clean up jump message map
+  for (const [jumpId, jumpData] of jumpMessageMap.entries()) {
+    if (jumpData.timestamp < cutoff) {
+      jumpMessageMap.delete(jumpId);
+    }
   }
 }, 10 * 60 * 1000);
 
@@ -630,9 +642,15 @@ client.on('interactionCreate', async interaction => {
   
   // Handle jump buttons
   if (interaction.customId.startsWith(JUMP_BUTTON_ID)) {
-    const encodedUrl = interaction.customId.split(':')[1];
-    const jumpUrl = decodeURIComponent(encodedUrl);
-    await interaction.reply({ content: `[Jump to contradictory message](${jumpUrl})`, flags: MessageFlags.Ephemeral });
+    const jumpId = interaction.customId.split(':')[1];
+    const jumpData = jumpMessageMap.get(jumpId);
+    
+    if (!jumpData) {
+      await interaction.reply({ content: "Jump link has expired.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    
+    await interaction.reply({ content: `[Jump to contradictory message](${jumpData.url})`, flags: MessageFlags.Ephemeral });
     return;
   }
 });
