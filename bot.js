@@ -203,7 +203,6 @@ function makeJumpButton(jumpUrl) {
   return new ActionRowBuilder().addComponents([
     new ButtonBuilder()
       .setCustomId(`${JUMP_BUTTON_ID}:${jumpId}`)
-      .setLabel('')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('🔗')
   ]);
