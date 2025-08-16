@@ -411,7 +411,7 @@ async function detectContradictionOrMisinformation(msg) {
       user: msg.author.id,
       channel: msg.channel.id,
       guildId: msg.guildId,
-      _id: { $ne: msg.id }
+      discordMessageId: { $ne: msg.id }
     })
     .sort({ ts: -1 })
     .limit(20)
