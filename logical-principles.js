@@ -30,17 +30,26 @@ CORE LOGICAL PRINCIPLES FOR REASONING:
 const CONTRADICTION_PRINCIPLES = `
 CONTRADICTION DETECTION PRINCIPLES:
 
-- Direct logical contradictions: "A" vs "not A"
-- Mutually exclusive categories: "X is Y" vs "X is Z" (when Y and Z cannot coexist)
-- Temporal contradictions: Claims about timing that cannot both be true
-- Quantitative contradictions: Numerical claims that conflict
-- Definitional contradictions: Using the same term with incompatible meanings
+TRUE CONTRADICTIONS (flag these):
+- Direct negation: "A is true" vs "A is false"
+- Mutually exclusive states: "X is alive" vs "X is dead"
+- Binary opposites: "It happened" vs "It never happened"  
+- Absolute vs negative: "All X are Y" vs "No X are Y"
+- Existence claims: "X exists" vs "X does not exist"
 
-AVOID flagging as contradictions:
-- Different aspects of complex topics
-- Temporal changes in position (specify timeframe)
-- Degrees of certainty vs absolute claims
-- Context-dependent statements
+NOT CONTRADICTIONS (do not flag):
+- Opinion differences: "I like X" vs "I dislike X" (both can be true at different times)
+- Nuanced positions: "X is mostly good" vs "X has problems" (both can be true)
+- Degree differences: "X is very important" vs "X is somewhat important"
+- Context-dependent: "X works in situation A" vs "X doesn't work in situation B"
+- Temporal evolution: "I used to think X" vs "Now I think Y"
+- Qualified statements: "X is usually true" vs "X was false in this case"
+- Different aspects: "X is technically correct" vs "X is misleading"
+
+EXACT EVIDENCE REQUIREMENT:
+- Quote the contradictory statement EXACTLY as written
+- Do not paraphrase or summarize
+- If you cannot find the exact contradictory statement, respond "contradiction":"no"
 `.trim();
 
 const MISINFORMATION_PRINCIPLES = `

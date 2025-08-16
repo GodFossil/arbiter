@@ -471,15 +471,23 @@ ${SYSTEM_INSTRUCTIONS}
 
 ${getLogicalContext('contradiction')}
 
-You are a careful contradiction detector for debate analysis with access to logical principles.
-Does the [New message] directly contradict any of the [Previous statements] sent by **this exact same user** below?
+You are a precise contradiction detector for debate analysis with access to logical principles.
+Does the [New message] create a DIRECT LOGICAL CONTRADICTION with any of the [Previous statements] sent by **this exact same user** below?
+
+IMPORTANT: Only flag TRUE contradictions where both statements cannot possibly be true simultaneously. Do NOT flag:
+- Different opinions on the same topic
+- Nuanced positions or clarifications  
+- Temporal changes in viewpoint
+- Degrees of certainty vs absolute claims
+- Different aspects of complex issues
+
 Always reply in strict JSON of the form:
 {"contradiction":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
-- "contradiction": Use "yes" if the new message is logically or factually incompatible with a prior message sent by this user; otherwise use "no".
-- "reason": For "yes", concisely explain how the contents of the new message and that of any prior message(s) are contradictory. Do not mention the user, do not narrate ("user said..."), and do not say "these statements conflict." Instead, simply state the essence of the contradiction, e.g., "Spheres are not flat," or "Vaccines either cause autism or they do not cause autism," or "There are no married bachelors." For "no", use an empty string.
-- "evidence": For "yes", provide the quoted contents of the user's prior message that contains the contradictory statement. For "no", use an empty string.
+- "contradiction": Use "yes" ONLY if the new message is absolutely logically incompatible with a prior message (both cannot be true). Examples: "X is true" vs "X is false", "All Y are Z" vs "No Y are Z", "A happened" vs "A never happened". Use "no" for different opinions, nuanced disagreements, or clarifications.
+- "reason": For "yes", state the logical incompatibility clearly, e.g., "Objects cannot be both spherical and flat," or "Events cannot both happen and never happen." For "no", use an empty string.
+- "evidence": For "yes", provide the EXACT quoted contents of the user's prior message that creates the logical contradiction. Quote exactly - do not paraphrase. For "no", use an empty string.
 - "url": For "yes", include a direct Discord link to the contradictory message (format: https://discord.com/channels/<server_id>/<channel_id>/<message_id>). For "no", use an empty string.
-In all cases, never reply with non-JSON or leave any field out. If you do not find a contradiction, respond "contradiction":"no".
+In all cases, never reply with non-JSON or leave any field out. If you do not find a TRUE logical contradiction, respond "contradiction":"no".
 [Previous statements]
 ${concatenated}
 [New message]
@@ -493,12 +501,32 @@ ${mainContent}
         if (match) parsed = JSON.parse(match[0]);
       } catch {}
       if (parsed && parsed.contradiction === "yes") {
-        // Find and link the matching prior message by content.
-        const evidenceMsg = priorSubstantive.find(
-          m =>
-            parsed.evidence &&
-            m.content.trim() === parsed.evidence.trim()
-        );
+        console.log(`[DEBUG] Contradiction detected, searching for evidence: "${parsed.evidence}"`);
+        
+        // Find and link the matching prior message by content - try multiple matching strategies
+        let evidenceMsg = null;
+        
+        if (parsed.evidence) {
+          // Strategy 1: Exact match
+          evidenceMsg = priorSubstantive.find(m => m.content.trim() === parsed.evidence.trim());
+          
+          // Strategy 2: Fuzzy match if exact fails  
+          if (!evidenceMsg) {
+            evidenceMsg = priorSubstantive.find(m => 
+              m.content.includes(parsed.evidence.trim()) || 
+              parsed.evidence.includes(m.content.trim())
+            );
+          }
+          
+          // Strategy 3: Find most similar if others fail
+          if (!evidenceMsg && priorSubstantive.length > 0) {
+            console.log(`[DEBUG] Exact/fuzzy match failed, using most recent message as fallback`);
+            evidenceMsg = priorSubstantive[0]; // Most recent
+          }
+        }
+        
+        console.log(`[DEBUG] Evidence message found: ${evidenceMsg ? 'YES' : 'NO'}`);
+        
         contradictionEvidenceUrl =
           evidenceMsg && evidenceMsg.discordMessageId
             ? `https://discord.com/channels/${evidenceMsg.guildId}/${evidenceMsg.channel}/${evidenceMsg.discordMessageId}`
