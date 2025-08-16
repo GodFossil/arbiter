@@ -3,6 +3,7 @@ const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
 const { connect } = require("./mongo");
 const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
+const { queryKnowledge, formatReferenceBlock, getKnowledgeStats } = require("./knowledge");
 const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -336,6 +337,22 @@ async function handleAdminCommands(msg) {
       return true;
     }
   }
+  if (msg.content === "!arbiter_knowledge_stats") {
+    try {
+      const stats = await getKnowledgeStats();
+      await msg.reply(
+        `📊 **Knowledge Base Statistics**\n` +
+        `Total chunks: ${stats.totalChunks}\n` +
+        `Total files: ${stats.totalFiles}\n` +
+        `Files: ${stats.fileBreakdown.map(f => `${f._id} (${f.count})`).join(', ') || 'None'}`
+      );
+      return true;
+    } catch (e) {
+      console.warn("[MODLOG] Failed to get knowledge stats.", e);
+      await msg.reply("Knowledge remains opaque.");
+      return true;
+    }
+  }
   return false;
 }
 
@@ -444,9 +461,14 @@ async function detectContradictionOrMisinformation(msg) {
       msg.content.length > MAX_FACTCHECK_CHARS
         ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
         : msg.content;
+    
+    // Get relevant knowledge for enhanced reasoning
+    const knowledgeChunks = await queryKnowledge(mainContent, 3);
+    const referenceBlock = formatReferenceBlock(knowledgeChunks);
+    
     const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
-You are a careful contradiction detector for debate analysis.
+You are a careful contradiction detector for debate analysis with access to reference material.
 Does the [New message] directly contradict any of the [Previous statements] sent by **this exact same user** below?
 Always reply in strict JSON of the form:
 {"contradiction":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
@@ -455,7 +477,7 @@ Always reply in strict JSON of the form:
 - "evidence": For "yes", provide the quoted contents of the user's prior message that contains the contradictory statement. For "no", use an empty string.
 - "url": For "yes", include a direct Discord link to the contradictory message (format: https://discord.com/channels/<server_id>/<channel_id>/<message_id>). For "no", use an empty string.
 In all cases, never reply with non-JSON or leave any field out. If you do not find a contradiction, respond "contradiction":"no".
-[Previous statements]
+${referenceBlock}[Previous statements]
 ${concatenated}
 [New message]
 ${mainContent}
@@ -495,6 +517,10 @@ ${mainContent}
         : msg.content;
     const answer = await exaAnswer(mainContent);
     console.log(`[DEBUG] Exa answer for "${mainContent}":`, answer);
+    
+    // Get relevant knowledge for enhanced reasoning
+    const knowledgeChunks = await queryKnowledge(mainContent, 3);
+    const referenceBlock = formatReferenceBlock(knowledgeChunks);
 
     // Do not check LLM if Exa answer is missing/empty/meaningless
     if (!answer || answer.answer.trim() === "" || /no relevant results|no results/i.test(answer.answer)) {
@@ -519,7 +545,7 @@ Always reply in strict JSON of the form:
 - "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the harmful claim. For "no", use an empty string.
 - "url": For "yes", include the URL that contains the corroborating source material. For "no", use an empty string.
 In all cases, never reply with non-JSON or leave any field out. If you can't find suitable evidence or the claim isn't critically harmful, respond "misinformation":"no".
-[User message]
+${referenceBlock}[User message]
 ${msg.content}
 [Web context]
 ${answer.answer}
@@ -740,18 +766,29 @@ client.on("messageCreate", async (msg) => {
           repliedToMsg.member ? repliedToMsg.member.displayName : repliedToMsg.author.username
         } (${repliedToMsg.author.username})\n${repliedToMsg.content}\n`;
     }
+    
+    // ---- KNOWLEDGE RETRIEVAL FOR USER-FACING REPLIES ----
+    let knowledgeSection = "";
+    try {
+      const knowledgeChunks = await queryKnowledge(msg.content, 3);
+      if (knowledgeChunks.length > 0) {
+        knowledgeSection = formatReferenceBlock(knowledgeChunks);
+      }
+    } catch (e) {
+      console.warn("Knowledge retrieval failed:", e.message);
+    }
 
           const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 Today is ${dateString}.
-Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
+Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results. If [REFERENCE MATERIAL] is present, use it to enhance your logical reasoning and factual accuracy.${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
 - Do not use ambiguous hedging or "on the one hand/on the other hand" language unless it is genuinely necessary.
 - Favor declarative, direct statements. When a position is unsupported, say so clearly and confidently.
 - Avoid generic phrases such as "It is important to note...", "It depends...", or "While both sides...".
 - Never conclude that "both sides have a point" if one side's claim is demonstrably weaker or unsupported.
 - Do not default to proposing compromise unless the evidence is genuinely balanced.
 - If you must indicate ambiguity, specify the best-supported or most-reasonable argument, do not equate unequal substantiations.` : ""}
-[user history]
+${knowledgeSection}[user history]
 ${userHistory}
 [channel context]
 ${channelHistory}
