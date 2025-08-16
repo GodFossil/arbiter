@@ -8,7 +8,7 @@ const DO_AI_URL = "https://inference.do-ai.run/v1";
 const DO_AI_KEY = process.env.DO_AI_API_KEY;
 
 // Configuration
-const EMBEDDINGS_MODEL = "sentence-transformers/multi-qa-mpnet-base-dot-v1"; // 768 dimensions
+const EMBEDDINGS_MODEL = "sentence-transformers/all-MiniLM-L6-v2"; // 384 dimensions - more likely to work
 const CHUNK_SIZE = 400; // Target tokens per chunk
 const OVERLAP_SIZE = 50; // Token overlap between chunks
 const DOCS_FOLDER = "./docs";
@@ -38,6 +38,13 @@ async function generateEmbedding(text) {
     return response.data.data[0].embedding;
   } catch (error) {
     console.error(`Failed to generate embedding for text: ${text.substring(0, 100)}...`);
+    console.error(`API Error Details:`, {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      url: `${DO_AI_URL}/embeddings`,
+      model: EMBEDDINGS_MODEL
+    });
     throw error;
   }
 }
@@ -108,6 +115,17 @@ async function processMarkdownFile(filePath) {
       
     } catch (error) {
       console.error(`   ❌ Failed to process chunk ${i + 1}: ${error.message}`);
+      
+      // Store chunk without embedding as fallback
+      processedChunks.push({
+        filename: filename,
+        chunkIndex: i,
+        content: chunk,
+        embedding: null, // No embedding - will be excluded from similarity search
+        tokenEstimate: Math.ceil(chunk.length / 4),
+        createdAt: new Date(),
+        embeddingFailed: true
+      });
     }
   }
   
@@ -139,6 +157,13 @@ async function createVectorIndex(db) {
 
 async function main() {
   try {
+    // Check if embeddings are disabled
+    if (process.env.DISABLE_EMBEDDINGS === "true") {
+      console.log("⚠️  Embeddings disabled via DISABLE_EMBEDDINGS env var");
+      console.log("   Knowledge base will not be built");
+      return;
+    }
+    
     // Connect to database
     const db = await connect();
     console.log("✅ Connected to MongoDB");
