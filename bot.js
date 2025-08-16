@@ -628,13 +628,13 @@ client.on("messageCreate", async (msg) => {
       }
       if (detection) {
         // CONTRADICTION DETECTED (with jump link if present)
-        if (detection.contradiction && detection.contradiction === "yes") {
-          let evidenceUrl = detection.url || "";
+        if (detection.contradiction && detection.contradiction.contradiction === "yes") {
+          let evidenceUrl = detection.contradiction.url || "";
           await msg.reply(
             `⚡ **CONTRADICTION DETECTED** ⚡\n` +
             `This message contradicts a prior statement you made:\n` +
-            `> ${detection.evidence}\n` +
-            `Reason: ${detection.reason}` +
+            `> ${detection.contradiction.evidence}\n` +
+            `Reason: ${detection.contradiction.reason}` +
             (evidenceUrl ? `\n[Jump to message](${evidenceUrl})` : "")
           );
         } else if (detection.misinformation && detection.misinformation.misinformation === "yes") {
