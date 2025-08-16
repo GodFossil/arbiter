@@ -3,7 +3,7 @@ const { connect } = require('./mongo');
 
 const DO_AI_URL = "https://inference.do-ai.run/v1";
 const DO_AI_KEY = process.env.DO_AI_API_KEY;
-const EMBEDDINGS_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
+const EMBEDDINGS_MODEL = "sentence-transformers/multi-qa-mpnet-base-dot-v1";
 
 /**
  * Generate embedding for a query text
@@ -15,7 +15,7 @@ async function generateQueryEmbedding(text) {
   
   try {
     const response = await axios.post(
-      `${DO_AI_URL}/embeddings`,
+      DO_AI_URL,
       {
         model: EMBEDDINGS_MODEL,
         input: text

@@ -8,7 +8,7 @@ const DO_AI_URL = "https://inference.do-ai.run/v1";
 const DO_AI_KEY = process.env.DO_AI_API_KEY;
 
 // Configuration
-const EMBEDDINGS_MODEL = "sentence-transformers/all-MiniLM-L6-v2"; // 384 dimensions - more likely to work
+const EMBEDDINGS_MODEL = "sentence-transformers/multi-qa-mpnet-base-dot-v1"; // 768 dimensions
 const CHUNK_SIZE = 400; // Target tokens per chunk
 const OVERLAP_SIZE = 50; // Token overlap between chunks
 const DOCS_FOLDER = "./docs";
@@ -22,7 +22,7 @@ async function generateEmbedding(text) {
   
   try {
     const response = await axios.post(
-      `${DO_AI_URL}/embeddings`,
+      DO_AI_URL,
       {
         model: EMBEDDINGS_MODEL,
         input: text
