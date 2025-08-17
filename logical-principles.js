@@ -1,91 +1,294 @@
 /**
- * Core logical principles and reasoning frameworks for Arbiter
- * These principles are injected into reasoning prompts to enhance logical analysis
+ * Advanced logical reasoning framework for Arbiter
+ * Provides context-aware logical principles and reasoning enhancement
  */
 
-const LOGICAL_PRINCIPLES = `
-CORE LOGICAL PRINCIPLES FOR REASONING:
-
-1. LAW OF NON-CONTRADICTION: Two contradictory statements cannot both be true simultaneously. If A is true, then not-A must be false.
-
-2. LAW OF EXCLUDED MIDDLE: For any proposition P, either P is true or P is false. No middle ground exists for factual claims.
-
-3. BURDEN OF PROOF: The person making a positive claim bears the responsibility to provide evidence. Absence of evidence is not evidence of absence, but extraordinary claims require extraordinary evidence.
-
-4. FALSE DICHOTOMY: Avoid assuming only two options exist when multiple possibilities may be valid. However, some claims genuinely are binary (true/false).
-
-5. LOGICAL CONSISTENCY: Arguments must be internally consistent. If someone holds contradictory positions, at least one must be incorrect.
-
-6. EVIDENCE HIERARCHY: Scientific consensus > peer-reviewed studies > expert opinion > anecdotal evidence > unsupported claims.
-
-7. CAUSAL vs CORRELATIONAL: Correlation does not imply causation. Temporal sequence and plausible mechanisms are required for causal claims.
-
-8. DEFINITIONAL CLARITY: Terms must be clearly defined. Equivocation (using the same word with different meanings) leads to invalid arguments.
-
-9. APPEAL TO AUTHORITY: Expert testimony is valuable in their field of expertise, but expertise doesn't transfer between unrelated domains.
-
-10. FACTUAL vs NORMATIVE: Distinguish between descriptive claims (what is) and prescriptive claims (what ought to be). Facts can be verified; values are debated.
-`.trim();
-
-const CONTRADICTION_PRINCIPLES = `
-CONTRADICTION DETECTION PRINCIPLES:
-
-TRUE CONTRADICTIONS (flag these):
-- Direct negation: "A is true" vs "A is false"
-- Mutually exclusive states: "X is alive" vs "X is dead"
-- Binary opposites: "It happened" vs "It never happened"  
-- Absolute vs negative: "All X are Y" vs "No X are Y"
-- Existence claims: "X exists" vs "X does not exist"
-
-NOT CONTRADICTIONS (do not flag):
-- Opinion differences: "I like X" vs "I dislike X" (both can be true at different times)
-- Nuanced positions: "X is mostly good" vs "X has problems" (both can be true)
-- Degree differences: "X is very important" vs "X is somewhat important"
-- Context-dependent: "X works in situation A" vs "X doesn't work in situation B"
-- Temporal evolution: "I used to think X" vs "Now I think Y"
-- Qualified statements: "X is usually true" vs "X was false in this case"
-- Different aspects: "X is technically correct" vs "X is misleading"
-
-EXACT EVIDENCE REQUIREMENT:
-- Quote the contradictory statement EXACTLY as written
-- Do not paraphrase or summarize
-- If you cannot find the exact contradictory statement, respond "contradiction":"no"
-`.trim();
-
-const MISINFORMATION_PRINCIPLES = `
-MISINFORMATION DETECTION PRINCIPLES:
-
-Critical misinformation (flag):
-- Medically dangerous false claims
-- Scientifically disproven assertions with policy implications
-- Definitively falsified conspiracy theories with evidence
-- Deliberate deception with serious consequences
-
-NOT misinformation (do not flag):
-- Contested but plausible theories
-- Minor factual errors without harm
-- Opinions and value judgments
-- Uncertainty expressions ("I think", "maybe")
-- Reporting others' claims ("people say")
-- Academic discussion of false ideas
-`.trim();
-
-function getLogicalContext(contextType = 'general') {
-  console.log(`[LOGIC] Injecting logical principles - context: ${contextType}`);
+// Core logical laws and principles
+const FOUNDATIONAL_LOGIC = {
+  nonContradiction: {
+    name: "Law of Non-Contradiction",
+    principle: "Two contradictory statements cannot both be true simultaneously",
+    application: "When evaluating conflicting claims, at least one must be false",
+    examples: ["'A exists' and 'A does not exist' cannot both be true", "'All X are Y' and 'Some X are not Y' are contradictory"]
+  },
   
-  const contexts = {
-    general: LOGICAL_PRINCIPLES,
-    contradiction: `${LOGICAL_PRINCIPLES}\n\n${CONTRADICTION_PRINCIPLES}`,
-    misinformation: `${LOGICAL_PRINCIPLES}\n\n${MISINFORMATION_PRINCIPLES}`,
-    comprehensive: `${LOGICAL_PRINCIPLES}\n\n${CONTRADICTION_PRINCIPLES}\n\n${MISINFORMATION_PRINCIPLES}`
+  excludedMiddle: {
+    name: "Law of Excluded Middle", 
+    principle: "For any factual proposition P, either P is true or P is false",
+    application: "Avoid false middle grounds on binary factual claims",
+    examples: ["Either vaccines cause autism or they don't - no middle position exists", "Historical events either happened or didn't"]
+  },
+  
+  identity: {
+    name: "Law of Identity",
+    principle: "A thing is what it is (A = A)",
+    application: "Consistent definitions and clear terminology prevent equivocation",
+    examples: ["If 'safe' means X in premise 1, it must mean X in premise 2", "Terms cannot shift meaning mid-argument"]
+  }
+};
+
+const REASONING_FRAMEWORKS = {
+  evidenceEvaluation: {
+    hierarchy: ["Scientific consensus", "Peer-reviewed studies", "Expert testimony", "Empirical data", "Anecdotal evidence", "Unsupported claims"],
+    burdenOfProof: "Positive claims require evidence; extraordinary claims require extraordinary evidence",
+    nullHypothesis: "Default position is skepticism until evidence is provided"
+  },
+  
+  causalAnalysis: {
+    requirements: ["Temporal precedence", "Correlation", "Plausible mechanism", "Alternative explanations ruled out"],
+    fallacies: ["Post hoc ergo propter hoc", "Cum hoc ergo propter hoc", "Correlation ≠ causation"]
+  },
+  
+  argumentStructure: {
+    validity: "Conclusion follows logically from premises",
+    soundness: "Valid argument with true premises",
+    strength: "Premises provide good support for conclusion"
+  }
+};
+
+const FALLACY_DETECTION = {
+  formal: [
+    "Affirming the consequent",
+    "Denying the antecedent", 
+    "Equivocation",
+    "Composition/Division"
+  ],
+  
+  informal: [
+    "Ad hominem",
+    "Appeal to authority (inappropriate)",
+    "Appeal to popularity", 
+    "Appeal to emotion",
+    "Straw man",
+    "False dichotomy",
+    "Slippery slope",
+    "Circular reasoning"
+  ]
+};
+
+// Context-specific principle sets
+const CONTEXT_FRAMEWORKS = {
+  contradiction: {
+    focus: "Logical incompatibility detection",
+    principles: [
+      FOUNDATIONAL_LOGIC.nonContradiction,
+      FOUNDATIONAL_LOGIC.identity
+    ],
+    guidelines: [
+      "Two statements contradict if accepting both creates logical impossibility",
+      "Semantic variations of same concept are not contradictions",
+      "Temporal context matters - positions can evolve over time",
+      "Qualified statements ('usually', 'sometimes') have different truth conditions than absolute claims",
+      "Context-dependent claims may both be true in different situations"
+    ],
+    redFlags: [
+      "Do not confuse disagreement with contradiction",
+      "Do not flag opinion changes as contradictions", 
+      "Do not ignore temporal or contextual qualifiers",
+      "Do not assume binary opposites when spectrum exists"
+    ]
+  },
+  
+  misinformation: {
+    focus: "Critical false information detection",
+    principles: [
+      REASONING_FRAMEWORKS.evidenceEvaluation,
+      FOUNDATIONAL_LOGIC.excludedMiddle
+    ],
+    guidelines: [
+      "Flag only assertions that are definitively false AND potentially harmful",
+      "Distinguish between contested theories and debunked claims",
+      "Consider intent - is user promoting or merely discussing?",
+      "Require strong evidence for misinformation claims",
+      "Scientific consensus carries weight but isn't infallible"
+    ],
+    redFlags: [
+      "Do not flag legitimate scientific debate as misinformation",
+      "Do not flag historical interpretations unless clearly falsified",
+      "Do not flag philosophical or normative positions",
+      "Do not flag uncertainty expressions as false claims"
+    ]
+  },
+  
+  general: {
+    focus: "Balanced reasoning and discourse analysis",
+    principles: Object.values(FOUNDATIONAL_LOGIC),
+    guidelines: [
+      "Prioritize truth over diplomacy",
+      "Acknowledge strength of evidence behind positions",
+      "Distinguish between fact and interpretation", 
+      "Recognize limits of knowledge and certainty",
+      "Maintain intellectual humility while being decisive when evidence is clear"
+    ],
+    redFlags: [
+      "Do not false-balance when evidence clearly favors one position",
+      "Do not hedge when facts are well-established",
+      "Do not treat all opinions as equally valid",
+      "Do not avoid judgment when evidence supports a clear conclusion"
+    ]
+  }
+};
+
+/**
+ * Get context-aware logical principles for enhanced reasoning
+ * @param {string} contextType - Type of reasoning context
+ * @param {Object} options - Additional context options
+ * @returns {string} Formatted logical principles for prompt injection
+ */
+function getLogicalContext(contextType = 'general', options = {}) {
+  console.log(`[LOGIC] Building ${contextType} reasoning framework`);
+  
+  const framework = CONTEXT_FRAMEWORKS[contextType] || CONTEXT_FRAMEWORKS.general;
+  
+  let output = `LOGICAL REASONING FRAMEWORK - ${framework.focus.toUpperCase()}\n\n`;
+  
+  // Add relevant foundational principles
+  if (framework.principles) {
+    output += "FOUNDATIONAL PRINCIPLES:\n";
+    framework.principles.forEach(principle => {
+      if (typeof principle === 'object' && principle.name) {
+        output += `• ${principle.name}: ${principle.principle}\n`;
+        if (principle.application) {
+          output += `  Application: ${principle.application}\n`;
+        }
+      }
+    });
+    output += "\n";
+  }
+  
+  // Add context-specific guidelines
+  if (framework.guidelines) {
+    output += "REASONING GUIDELINES:\n";
+    framework.guidelines.forEach(guideline => {
+      output += `• ${guideline}\n`;
+    });
+    output += "\n";
+  }
+  
+  // Add red flags and warnings
+  if (framework.redFlags) {
+    output += "CRITICAL WARNINGS:\n";
+    framework.redFlags.forEach(redFlag => {
+      output += `⚠️ ${redFlag}\n`;
+    });
+    output += "\n";
+  }
+  
+  // Add evidence hierarchy for relevant contexts
+  if (contextType === 'misinformation' || contextType === 'general') {
+    output += "EVIDENCE HIERARCHY (strongest to weakest):\n";
+    REASONING_FRAMEWORKS.evidenceEvaluation.hierarchy.forEach((level, index) => {
+      output += `${index + 1}. ${level}\n`;
+    });
+    output += "\n";
+  }
+  
+  // Add fallacy awareness for general reasoning
+  if (contextType === 'general') {
+    output += "COMMON FALLACIES TO AVOID:\n";
+    output += `Formal: ${FALLACY_DETECTION.formal.join(', ')}\n`;
+    output += `Informal: ${FALLACY_DETECTION.informal.join(', ')}\n\n`;
+  }
+  
+  console.log(`[LOGIC] Generated ${output.split('\n').length} lines of reasoning framework`);
+  return output.trim();
+}
+
+/**
+ * Get specific logical principle for targeted application
+ * @param {string} principleName - Name of specific principle
+ * @returns {Object} Principle details
+ */
+function getSpecificPrinciple(principleName) {
+  return FOUNDATIONAL_LOGIC[principleName] || null;
+}
+
+/**
+ * Analyze content for logical issues and provide recommendations (cached)
+ * @param {string} content - Content to analyze
+ * @param {Map} cache - Optional cache for performance
+ * @returns {Object} Analysis results and recommendations
+ */
+function analyzeLogicalContent(content, cache = null) {
+  // Check cache first if provided
+  if (cache) {
+    const cacheKey = content.trim().toLowerCase();
+    const cached = cache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < 60000)) { // 1 minute TTL
+      return cached.analysis;
+    }
+  }
+  
+  const analysis = {
+    hasUncertainty: false,
+    hasTemporal: false,
+    hasAbsolutes: false,
+    hasEvidence: false,
+    substantiveness: 0, // 0-1 score of how substantive the content is
+    recommendations: []
   };
   
-  return contexts[contextType] || contexts.general;
+  const lowerContent = content.toLowerCase();
+  
+  // Check for uncertainty markers
+  const uncertaintyMarkers = ['maybe', 'perhaps', 'possibly', 'might', 'could', 'i think', 'seems'];
+  analysis.hasUncertainty = uncertaintyMarkers.some(marker => lowerContent.includes(marker));
+  
+  // Check for temporal markers
+  const temporalMarkers = ['always', 'never', 'used to', 'previously', 'now', 'currently', 'will'];
+  analysis.hasTemporal = temporalMarkers.some(marker => lowerContent.includes(marker));
+  
+  // Check for absolute claims
+  const absoluteMarkers = ['all', 'every', 'none', 'never', 'always', 'definitely', 'certainly'];
+  analysis.hasAbsolutes = absoluteMarkers.some(marker => lowerContent.includes(marker));
+  
+  // Check for evidence indicators
+  const evidenceMarkers = ['study', 'research', 'data', 'proven', 'evidence', 'source', 'according to'];
+  analysis.hasEvidence = evidenceMarkers.some(marker => lowerContent.includes(marker));
+  
+  // Calculate substantiveness score (0-1)
+  let substantiveness = 0.5; // Base score
+  
+  // Factors that increase substantiveness
+  if (analysis.hasEvidence) substantiveness += 0.2;
+  if (analysis.hasAbsolutes) substantiveness += 0.1;
+  if (content.length > 50) substantiveness += 0.1;
+  if (content.includes('because') || content.includes('therefore') || content.includes('thus')) substantiveness += 0.1;
+  
+  // Factors that decrease substantiveness  
+  if (analysis.hasUncertainty) substantiveness -= 0.1;
+  if (content.length < 20) substantiveness -= 0.2;
+  
+  analysis.substantiveness = Math.max(0, Math.min(1, substantiveness));
+  
+  // Generate recommendations
+  if (analysis.hasUncertainty) {
+    analysis.recommendations.push("Consider uncertainty markers when evaluating definitiveness");
+  }
+  if (analysis.hasTemporal) {
+    analysis.recommendations.push("Account for temporal context in contradiction detection");
+  }
+  if (analysis.hasAbsolutes && !analysis.hasEvidence) {
+    analysis.recommendations.push("Absolute claims require strong evidence");
+  }
+  if (analysis.substantiveness < 0.3) {
+    analysis.recommendations.push("Low substantiveness - may not warrant detailed analysis");
+  }
+  
+  // Cache the result if cache provided
+  if (cache) {
+    const cacheKey = content.trim().toLowerCase();
+    cache.set(cacheKey, { analysis, timestamp: Date.now() });
+  }
+  
+  return analysis;
 }
 
 module.exports = {
   getLogicalContext,
-  LOGICAL_PRINCIPLES,
-  CONTRADICTION_PRINCIPLES,
-  MISINFORMATION_PRINCIPLES
+  getSpecificPrinciple,
+  analyzeLogicalContent,
+  FOUNDATIONAL_LOGIC,
+  REASONING_FRAMEWORKS,
+  FALLACY_DETECTION
 };

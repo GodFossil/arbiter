@@ -3,7 +3,7 @@ const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
 const { connect } = require("./mongo");
 const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
-const { getLogicalContext } = require("./logical-principles");
+const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logical-principles");
 const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -53,27 +53,78 @@ const KNOWN_BOT_COMMANDS = [
   "!trialReset", "!release", "!mark", "!flag", "/endthread", ".newPollButton", "!webhook", "!goTrigger", "!&",
   "!eval", "!chart", "&test", "++" // Add others here as needed
 ];
-function isTrivialOrSafeMessage(content) {
-  if (!content || typeof content !== "string") return true;
-  const safe = [
+// Cached trivial patterns for performance
+const TRIVIAL_PATTERNS = {
+  safe: new Set([
     "hello", "hi", "hey", "ok", "okay", "yes", "no", "lol", "sure", "cool", "nice", "thanks",
     "thank you", "hey arbiter", "sup", "idk", "good morning", "good night", "haha", "lmao",
     "brb", "ttyl", "gtg", "omg", "wtf", "tbh", "imo", "ngl", "fr", "bet", "facts", "cap",
-    "no cap", "word", "mood", "same", "this", "that", "what", "who", "when", "where", "why"
-  ];
-  const onlyEmoji = /^[\W_]+$/u;
-  const onlyPunctuation = /^[.!?,:;]+$/;
-  const repeatedChars = /^(.)\1{2,}$/; // Like "aaa", "!!!", "???"
+    "no cap", "word", "mood", "same", "this", "that", "what", "who", "when", "where", "why",
+    "rip", "f", "oof", "yikes", "cringe", "based", "ratio", "w", "l", "cope", "seethe",
+    "touch grass", "skill issue", "imagine", "sus", "among us", "poggers", "sheesh", "bussin"
+  ]),
   
-  const trimmed = content.trim().toLowerCase();
-  return (
-    safe.includes(trimmed)
-    || onlyEmoji.test(content)
-    || onlyPunctuation.test(content)
-    || repeatedChars.test(trimmed)
-    || trimmed.length < 4
-    || /^[a-z]{1,3}$/.test(trimmed) // Single letters or very short acronyms
-  );
+  // Compiled regex patterns for better performance
+  onlyEmoji: /^[\p{Emoji}\s\p{P}]+$/u,
+  onlyPunctuation: /^[.!?,:;'"()\[\]{}\-_+=<>|\\\/~`^*&%$#@]+$/,
+  repeatedChars: /^(.)\1{2,}$/,
+  shortAcronym: /^[a-z]{1,3}$/,
+  onlyNumbers: /^\d+$/,
+  reactionText: /^(same|this|true|real|facts|\+1|-1|agree|disagree)$/,
+  
+  // Discourse markers that add no substantive content
+  fillerPhrases: /^(anyway|so|well|like|actually|basically|literally|honestly|obviously|clearly|wait|hold up|bruh|bro|dude|man|yo)$/,
+  
+  // Questions that don't assert anything substantive
+  simpleQuestions: /^(what|who|when|where|why|how|really|seriously)\??$/,
+  
+  // Acknowledgments and reactions
+  acknowledgments: /^(got it|i see|makes sense|fair enough|right|exactly|precisely|indeed|correct|wrong|nope|yep|yup|nah)$/
+};
+
+function isTrivialOrSafeMessage(content) {
+  if (!content || typeof content !== "string") return true;
+  
+  const trimmed = content.trim();
+  const lower = trimmed.toLowerCase();
+  
+  // Quick length checks first (fastest)
+  if (trimmed.length < 4) return true;
+  if (trimmed.length > 200) return false; // Long messages are likely substantive
+  
+  // Check cached safe words (O(1) lookup)
+  if (TRIVIAL_PATTERNS.safe.has(lower)) return true;
+  
+  // Check compiled regex patterns (faster than multiple pattern checks)
+  if (TRIVIAL_PATTERNS.onlyEmoji.test(content)) return true;
+  if (TRIVIAL_PATTERNS.onlyPunctuation.test(content)) return true;
+  if (TRIVIAL_PATTERNS.repeatedChars.test(lower)) return true;
+  if (TRIVIAL_PATTERNS.onlyNumbers.test(lower)) return true;
+  if (TRIVIAL_PATTERNS.shortAcronym.test(lower)) return true;
+  if (TRIVIAL_PATTERNS.reactionText.test(lower)) return true;
+  if (TRIVIAL_PATTERNS.fillerPhrases.test(lower)) return true;
+  if (TRIVIAL_PATTERNS.simpleQuestions.test(lower)) return true;
+  if (TRIVIAL_PATTERNS.acknowledgments.test(lower)) return true;
+  
+  // Advanced trivial detection
+  const words = lower.split(/\s+/);
+  
+  // Single word reactions
+  if (words.length === 1) {
+    return true; // Most single words are reactions
+  }
+  
+  // Repeated words/phrases
+  if (words.length <= 3 && new Set(words).size === 1) {
+    return true; // "no no no", "yes yes", etc.
+  }
+  
+  // All words are from safe set
+  if (words.length <= 5 && words.every(word => TRIVIAL_PATTERNS.safe.has(word))) {
+    return true; // Combinations of safe words
+  }
+  
+  return false;
 }
 function isOtherBotCommand(content) {
   if (!content) return false;
@@ -84,7 +135,10 @@ function isOtherBotCommand(content) {
 
 // ---- TUNEABLE PARAMETERS ----
 const historyCache = { user: new Map(), channel: new Map() };
+const contentAnalysisCache = new Map(); // Cache content analysis results
+const contradictionValidationCache = new Map(); // Cache validation results
 const HISTORY_TTL_MS = 4000;
+const ANALYSIS_CACHE_TTL_MS = 60000; // 1 minute TTL for analysis cache
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
 const MAX_FACTCHECK_CHARS = 500;
@@ -150,6 +204,105 @@ function truncateMessage(content, maxLength = 1950) {
   const cutPoint = lastSpace > maxLength * 0.8 ? lastSpace : maxLength;
   
   return content.slice(0, cutPoint) + '... [truncated]';
+}
+
+function validateContradiction(statement1, statement2) {
+  const s1 = statement1.toLowerCase().trim();
+  const s2 = statement2.toLowerCase().trim();
+  
+  console.log(`[DEBUG] Validating contradiction:`);
+  console.log(`[DEBUG]   Statement 1: "${statement1}"`);
+  console.log(`[DEBUG]   Statement 2: "${statement2}"`);
+  
+  // Exact match = not a contradiction (same statement)
+  if (s1 === s2) {
+    console.log(`[DEBUG] Identical statements - not a contradiction`);
+    return false;
+  }
+  
+  // Check for negation patterns that indicate TRUE contradictions
+  const negationPatterns = [
+    // Direct negation pairs
+    { positive: /\b(is|are|was|were)\b/, negative: /\b(is not|are not|was not|were not|isn't|aren't|wasn't|weren't)\b/ },
+    { positive: /\bexist(s)?\b/, negative: /\b(don't|doesn't|do not|does not) exist\b/ },
+    { positive: /\btrue\b/, negative: /\b(false|not true|untrue)\b/ },
+    { positive: /\breal\b/, negative: /\b(fake|not real|unreal)\b/ },
+    { positive: /\bhappened\b/, negative: /\b(never happened|didn't happen)\b/ },
+    { positive: /\bcause(s)?\b/, negative: /\b(don't cause|doesn't cause|do not cause)\b/ },
+    { positive: /\bsafe\b/, negative: /\b(dangerous|unsafe|harmful)\b/ },
+    { positive: /\beffective\b/, negative: /\b(ineffective|useless)\b/ }
+  ];
+  
+  // Check for true negation contradictions
+  for (const pattern of negationPatterns) {
+    const s1HasPositive = pattern.positive.test(s1);
+    const s1HasNegative = pattern.negative.test(s1);
+    const s2HasPositive = pattern.positive.test(s2);
+    const s2HasNegative = pattern.negative.test(s2);
+    
+    // True contradiction: one has positive, other has negative
+    if ((s1HasPositive && s2HasNegative) || (s1HasNegative && s2HasPositive)) {
+      console.log(`[DEBUG] TRUE negation contradiction found with pattern: ${pattern.positive.source}`);
+      return true;
+    }
+  }
+  
+  // Check for semantic agreement (both describing same general concept)
+  const agreementClusters = [
+    // Shape concepts that agree
+    ['flat', 'disc', 'pancake', 'plane'],
+    ['round', 'spherical', 'ball', 'globe'],
+    // Size concepts  
+    ['big', 'large', 'huge', 'massive'],
+    ['small', 'tiny', 'little', 'miniature'],
+    // Quality concepts
+    ['good', 'great', 'excellent', 'amazing'],
+    ['bad', 'terrible', 'awful', 'horrible'],
+    // Certainty concepts
+    ['definitely', 'certainly', 'absolutely', 'clearly'],
+    ['maybe', 'possibly', 'perhaps', 'might'],
+    // Temporal concepts  
+    ['always', 'constantly', 'forever', 'permanently'],
+    ['never', 'not ever', 'at no time'],
+    // Evidence concepts
+    ['proven', 'confirmed', 'verified', 'established'],
+    ['disproven', 'debunked', 'falsified', 'refuted']
+  ];
+  
+  // Check if both statements use words from same semantic cluster
+  for (const cluster of agreementClusters) {
+    const s1Words = cluster.filter(word => s1.includes(word));
+    const s2Words = cluster.filter(word => s2.includes(word));
+    
+    if (s1Words.length > 0 && s2Words.length > 0) {
+      console.log(`[DEBUG] Semantic agreement in cluster [${cluster.join(', ')}]: "${s1Words}" vs "${s2Words}"`);
+      return false; // Both use similar semantic concepts
+    }
+  }
+  
+  // Check for uncertainty language that prevents contradictions
+  const uncertaintyMarkers = ['maybe', 'perhaps', 'possibly', 'might', 'could', 'i think', 'i believe', 'seems like', 'appears'];
+  const s1Uncertain = uncertaintyMarkers.some(marker => s1.includes(marker));
+  const s2Uncertain = uncertaintyMarkers.some(marker => s2.includes(marker));
+  
+  if (s1Uncertain || s2Uncertain) {
+    console.log(`[DEBUG] Uncertainty language detected - not a definitive contradiction`);
+    return false;
+  }
+  
+  // Check for temporal qualifiers that prevent contradictions
+  const temporalMarkers = ['used to', 'previously', 'before', 'now', 'currently', 'today', 'at first', 'initially', 'later', 'then'];
+  const s1Temporal = temporalMarkers.some(marker => s1.includes(marker));
+  const s2Temporal = temporalMarkers.some(marker => s2.includes(marker));
+  
+  if (s1Temporal || s2Temporal) {
+    console.log(`[DEBUG] Temporal qualifiers detected - statements may refer to different time periods`);
+    return false;
+  }
+  
+  // If we get here, it might be a valid contradiction
+  console.log(`[DEBUG] No semantic agreement or disqualifying factors found - allowing contradiction`);
+  return true;
 }
 
 // ---- HISTORY UTILS ----
@@ -259,6 +412,24 @@ setInterval(async () => {
     // Remove from map regardless of button disable success
     latestSourcesByBotMsg.delete(id);
   }
+  
+  // Clean up analysis caches
+  const analysisKeys = [...contentAnalysisCache.keys()];
+  analysisKeys.forEach(key => {
+    const cached = contentAnalysisCache.get(key);
+    if (cached && (Date.now() - cached.timestamp > ANALYSIS_CACHE_TTL_MS)) {
+      contentAnalysisCache.delete(key);
+    }
+  });
+  
+  const validationKeys = [...contradictionValidationCache.keys()];
+  validationKeys.forEach(key => {
+    // Validation cache has no timestamp, clean after 1 hour
+    if (contradictionValidationCache.size > 1000) { // Prevent memory bloat
+      contradictionValidationCache.clear();
+    }
+  });
+  
 }, 10 * 60 * 1000);
 
 // ---- MEMORY SAVE WITH META ----
@@ -362,6 +533,29 @@ async function handleAdminCommands(msg) {
     } catch (e) {
       console.warn("[MODLOG] Failed to erase all memory.", e);
       await msg.reply("The void resists being emptied.");
+      return true;
+    }
+  }
+  if (msg.content.startsWith("!arbiter_analyze ")) {
+    try {
+      const textToAnalyze = msg.content.replace("!arbiter_analyze ", "").trim();
+      const analysis = analyzeLogicalContent(textToAnalyze);
+      await msg.reply(
+        `🧠 **Logical Analysis**\n` +
+        `**Content:** "${textToAnalyze}"\n\n` +
+        `**Analysis:**\n` +
+        `• Uncertainty markers: ${analysis.hasUncertainty ? '✅' : '❌'}\n` +
+        `• Temporal qualifiers: ${analysis.hasTemporal ? '✅' : '❌'}\n` +
+        `• Absolute claims: ${analysis.hasAbsolutes ? '✅' : '❌'}\n` +
+        `• Evidence indicators: ${analysis.hasEvidence ? '✅' : '❌'}\n\n` +
+        (analysis.recommendations.length > 0 ? 
+          `**Recommendations:**\n${analysis.recommendations.map(r => `• ${r}`).join('\n')}` : 
+          `**No specific recommendations**`)
+      );
+      return true;
+    } catch (e) {
+      console.warn("[MODLOG] Failed to analyze content.", e);
+      await msg.reply("Analysis proves elusive.");
       return true;
     }
   }
@@ -475,12 +669,29 @@ async function detectContradictionOrMisinformation(msg) {
         ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
         : msg.content;
     
+    // Analyze current message for logical context (with caching)
+    const contentAnalysis = analyzeLogicalContent(mainContent, contentAnalysisCache);
+    console.log(`[DEBUG] Content analysis:`, contentAnalysis);
+    
+    // Early exit for low substantiveness content
+    if (contentAnalysis.substantiveness < 0.4) {
+      console.log(`[DEBUG] Low substantiveness (${contentAnalysis.substantiveness}) - skipping expensive AI analysis`);
+      return { contradiction: null, misinformation: null };
+    }
+    
     const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${getLogicalContext('contradiction')}
+${getLogicalContext('contradiction', { contentAnalysis })}
 
-You are a precise contradiction detector for debate analysis with access to logical principles.
+You are a precise contradiction detector for debate analysis with access to advanced logical principles.
+
+CONTENT ANALYSIS INSIGHTS:
+- Uncertainty level: ${contentAnalysis.hasUncertainty ? 'HIGH' : 'LOW'}
+- Temporal qualifiers: ${contentAnalysis.hasTemporal ? 'PRESENT' : 'ABSENT'}  
+- Absolute claims: ${contentAnalysis.hasAbsolutes ? 'PRESENT' : 'ABSENT'}
+- Evidence provided: ${contentAnalysis.hasEvidence ? 'YES' : 'NO'}
+${contentAnalysis.recommendations.length > 0 ? '\nRECOMMENDATIONS:\n' + contentAnalysis.recommendations.map(r => `• ${r}`).join('\n') : ''}
 Does the [New message] create a DIRECT LOGICAL CONTRADICTION with any of the [Previous statements] sent by **this exact same user** below?
 
 IMPORTANT: Only flag TRUE contradictions where both statements cannot possibly be true simultaneously. Do NOT flag:
@@ -492,8 +703,8 @@ IMPORTANT: Only flag TRUE contradictions where both statements cannot possibly b
 
 Always reply in strict JSON of the form:
 {"contradiction":"yes"|"no", "reason":"...", "evidence":"...", "contradicting":"...", "url":"..."}
-- "contradiction": Use "yes" ONLY if statements are absolutely logically incompatible (both cannot be true). This includes cross-message contradictions (current message vs previous messages) AND self-contradictions (contradictory statements within the current message itself). Examples: "X is true" vs "X is false", "All Y are Z" vs "No Y are Z", "A happened" vs "A never happened". Use "no" for different opinions, nuanced disagreements, or clarifications.
-- "reason": For "yes", explain precisely WHY these statements cannot both be true simultaneously. Focus on the logical impossibility and make it clear to any reader. Example: "A single entity cannot simultaneously exist and not exist" or "An event cannot both occur and never occur at the same time." For "no", use an empty string.
+- "contradiction": Use "yes" ONLY if statements are absolutely logically incompatible (both cannot be true). This includes cross-message contradictions (current message vs previous messages) AND self-contradictions (contradictory statements within the current message itself). Examples: "X is true" vs "X is false", "All Y are Z" vs "No Y are Z", "A happened" vs "A never happened". IMPORTANT: Do NOT flag semantically similar statements as contradictory (e.g., "flat" and "disc" both describe non-spherical shapes). Use "no" for different opinions, nuanced disagreements, clarifications, or semantically similar statements.
+- "reason": For "yes", explain precisely WHY these statements cannot both be true simultaneously. Focus on the actual logical impossibility using the exact words from both statements. Base your reasoning ONLY on what is explicitly stated - do not infer meanings that aren't clearly present. Example: "A person cannot simultaneously claim 'X does not exist' and 'I was affected by X'" For "no", use an empty string.
 - "evidence": For "yes", provide the EXACT first/earlier contradicted statement. For cross-message: quote from previous message. For self-contradiction: quote the first contradictory segment from current message. Quote exactly - do not paraphrase. For "no", use an empty string.
 - "contradicting": For "yes", provide the EXACT second/later contradicting statement. For cross-message: quote from current message. For self-contradiction: quote the second contradictory segment from current message. Quote exactly - do not paraphrase. For "no", use an empty string.
 - "url": For "yes", include a direct Discord link to the contradictory message (format: https://discord.com/channels/<server_id>/<channel_id>/<message_id>). For "no", use an empty string.
@@ -512,6 +723,7 @@ ${mainContent}
       } catch {}
       if (parsed && parsed.contradiction === "yes") {
         console.log(`[DEBUG] Contradiction detected, searching for evidence: "${parsed.evidence}"`);
+        console.log(`[DEBUG] Available message history:`, priorSubstantive.map(m => `"${m.content}"`));
         
         // Find and link the matching prior message by content - try multiple matching strategies
         let evidenceMsg = null;
@@ -519,6 +731,7 @@ ${mainContent}
         if (parsed.evidence) {
           // Strategy 1: Exact match
           evidenceMsg = priorSubstantive.find(m => m.content.trim() === parsed.evidence.trim());
+          console.log(`[DEBUG] Exact match: ${evidenceMsg ? 'FOUND' : 'NOT FOUND'}`);
           
           // Strategy 2: Fuzzy match if exact fails  
           if (!evidenceMsg) {
@@ -526,16 +739,42 @@ ${mainContent}
               m.content.includes(parsed.evidence.trim()) || 
               parsed.evidence.includes(m.content.trim())
             );
+            console.log(`[DEBUG] Fuzzy match: ${evidenceMsg ? 'FOUND' : 'NOT FOUND'}`);
           }
           
-          // Strategy 3: Find most similar if others fail
-          if (!evidenceMsg && priorSubstantive.length > 0) {
-            console.log(`[DEBUG] Exact/fuzzy match failed, using most recent message as fallback`);
-            evidenceMsg = priorSubstantive[0]; // Most recent
+          // Strategy 3: Check if evidence actually exists in history
+          if (!evidenceMsg) {
+            console.log(`[DEBUG] WARNING: AI quoted evidence that doesn't exist in message history!`);
+            console.log(`[DEBUG] Rejecting contradiction due to invalid evidence matching`);
+            contradiction = null; // Reject invalid contradictions
+          } else {
+            // Verify the contradiction makes sense
+            const evidenceText = evidenceMsg.content.toLowerCase();
+            const currentText = msg.content.toLowerCase();
+            
+            // Advanced semantic validation to prevent false contradictions (with caching)
+            const validationKey = `${evidenceMsg.content}|${msg.content}`;
+            let isValidContradiction = contradictionValidationCache.get(validationKey);
+            
+            if (isValidContradiction === undefined) {
+              isValidContradiction = validateContradiction(evidenceMsg.content, msg.content);
+              contradictionValidationCache.set(validationKey, isValidContradiction);
+            } else {
+              console.log(`[DEBUG] Using cached validation result`);
+            }
+            
+            console.log(`[DEBUG] Semantic validation result: ${isValidContradiction ? 'VALID' : 'INVALID'}`);
+            
+            if (!isValidContradiction) {
+              console.log(`[DEBUG] Semantic analysis rejected contradiction - likely false positive`);
+              contradiction = null;
+            }
           }
         }
         
-        console.log(`[DEBUG] Evidence message found: ${evidenceMsg ? 'YES' : 'NO'}`);
+        if (evidenceMsg) {
+          console.log(`[DEBUG] Using evidence from message: "${evidenceMsg.content}"`);
+        }
         
         contradictionEvidenceUrl =
           evidenceMsg && evidenceMsg.discordMessageId
@@ -565,12 +804,27 @@ ${mainContent}
       return { contradiction, misinformation: null };
     }
 
+    // Analyze content for misinformation context (with caching)
+    const misinfoContentAnalysis = analyzeLogicalContent(mainContent, contentAnalysisCache);
+    
+    // Skip misinformation check for low substantiveness content
+    if (misinfoContentAnalysis.substantiveness < 0.3) {
+      console.log(`[DEBUG] Low substantiveness for misinformation check (${misinfoContentAnalysis.substantiveness}) - skipping`);
+      return { contradiction, misinformation: null };
+    }
+    
     const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${getLogicalContext('misinformation')}
+${getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis })}
 
 You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.
+
+CONTENT ANALYSIS FOR FACT-CHECKING:
+- User certainty level: ${misinfoContentAnalysis.hasUncertainty ? 'UNCERTAIN (less likely to be misinformation)' : 'DEFINITIVE'}
+- Evidence backing: ${misinfoContentAnalysis.hasEvidence ? 'SOME PROVIDED' : 'NONE PROVIDED'}
+- Claim type: ${misinfoContentAnalysis.hasAbsolutes ? 'ABSOLUTE' : 'QUALIFIED'}
+${misinfoContentAnalysis.recommendations.length > 0 ? '\nANALYSIS NOTES:\n' + misinfoContentAnalysis.recommendations.map(r => `• ${r}`).join('\n') : ''}
 Does the [User message] contain dangerous misinformation that the user is personally making, asserting, or endorsing according to the [Web context]?
 IMPORTANT: Only flag messages where the user is directly claiming or promoting false information. Do NOT flag messages where the user is merely reporting what others say, expressing uncertainty, rejecting false claims, or discussing misinformation without endorsing it.
 Always reply in strict JSON of the form:
@@ -686,7 +940,13 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ============ BACKGROUND DETECTION =============
-  if (msg.content.length <= MAX_FACTCHECK_CHARS) {
+  // Intelligent pre-filtering to avoid unnecessary API calls
+  const shouldRunDetection = msg.content.length <= MAX_FACTCHECK_CHARS && 
+    !isTrivialOrSafeMessage(msg.content) && 
+    !isOtherBotCommand(msg.content) &&
+    msg.content.length > 8; // Minimum substantive length
+  
+  if (shouldRunDetection) {
     console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
     (async () => {
       let detection = null;
@@ -744,7 +1004,7 @@ client.on("messageCreate", async (msg) => {
           const contradictionReply = 
             `⚡ **CONTRADICTION DETECTED** ⚡\n\n` +
             `\`\`\`${detection.contradiction.evidence}\`\`\`\n` +
-            `\`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n` +
+            `\`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n\n` +
             `${detection.contradiction.reason}`;
           
           const evidenceUrl = detection.contradiction.url || "";
