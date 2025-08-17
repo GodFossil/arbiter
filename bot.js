@@ -141,6 +141,17 @@ function cleanUrl(url) {
   return url.trim().replace(/[)\].,;:!?]+$/g, '');
 }
 
+function truncateMessage(content, maxLength = 1950) {
+  if (!content || content.length <= maxLength) return content;
+  
+  // Try to truncate at word boundary
+  const truncated = content.slice(0, maxLength);
+  const lastSpace = truncated.lastIndexOf(' ');
+  const cutPoint = lastSpace > maxLength * 0.8 ? lastSpace : maxLength;
+  
+  return content.slice(0, cutPoint) + '... [truncated]';
+}
+
 // ---- HISTORY UTILS ----
 async function fetchUserHistory(userId, channelId, guildId, limit = 7, excludeMsgId = null) {
   const key = `${userId}:${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
@@ -722,11 +733,11 @@ client.on("messageCreate", async (msg) => {
           
           if (evidenceUrl) {
             await msg.reply({
-              content: contradictionReply,
+              content: truncateMessage(contradictionReply),
               components: [makeJumpButton(evidenceUrl)]
             });
           } else {
-            await msg.reply(contradictionReply);
+            await msg.reply(truncateMessage(contradictionReply));
           }
         } else if (detection.misinformation && detection.misinformation.misinformation === "yes") {
           const misinfoReply = 
@@ -737,9 +748,9 @@ client.on("messageCreate", async (msg) => {
           const sourcesForButton = detection.misinformation.url ? [detection.misinformation.url] : [];
           
           if (sourcesForButton.length > 0) {
-            await replyWithSourcesButton(msg, { content: misinfoReply }, sourcesForButton, latestSourcesByBotMsg);
+            await replyWithSourcesButton(msg, { content: truncateMessage(misinfoReply) }, sourcesForButton, latestSourcesByBotMsg);
           } else {
-            await msg.reply(misinfoReply);
+            await msg.reply(truncateMessage(misinfoReply));
           }
         }
       }
@@ -881,9 +892,9 @@ try {
     .map(u => cleanUrl(u))
     .filter(u => typeof u === "string" && u.startsWith("http")))];
   if (filteredSources.length > 0) {
-    await replyWithSourcesButton(msg, { content: replyText }, filteredSources, latestSourcesByBotMsg);
+    await replyWithSourcesButton(msg, { content: truncateMessage(replyText) }, filteredSources, latestSourcesByBotMsg);
   } else {
-    await msg.reply(replyText);
+    await msg.reply(truncateMessage(replyText));
   }
 } catch (e) {
   console.error("Discord reply failed:", e);
@@ -902,7 +913,7 @@ try {
         guildId: msg.guildId,
         guildName: getGuildName(msg),
         isBot: true,
-        content: replyText,
+        content: truncateMessage(replyText),
         ts: new Date(),
       });
     } catch (e) {
