@@ -194,7 +194,6 @@ async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId =
 
 // Button logic  
 const SOURCE_BUTTON_ID = "arbiter-show-sources";
-const JUMP_BUTTON_ID = "arbiter-jump-message";
 
 function makeSourcesButton(sourceArray, msgId) {
   return new ActionRowBuilder().addComponents([
@@ -207,20 +206,15 @@ function makeSourcesButton(sourceArray, msgId) {
 }
 
 function makeJumpButton(jumpUrl) {
-  // Generate a short ID and store the URL in the map
-  const jumpId = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-  jumpMessageMap.set(jumpId, { url: jumpUrl, timestamp: Date.now() });
-  
   return new ActionRowBuilder().addComponents([
     new ButtonBuilder()
-      .setCustomId(`${JUMP_BUTTON_ID}:${jumpId}`)
-      .setStyle(ButtonStyle.Secondary)
+      .setURL(jumpUrl)
+      .setStyle(ButtonStyle.Link)
       .setEmoji('🔗')
   ]);
 }
 
 let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
-let jumpMessageMap = new Map(); // jumpId -> { url, timestamp }
 
 setInterval(async () => {
   // Clean up after 1 hour
@@ -264,13 +258,6 @@ setInterval(async () => {
     
     // Remove from map regardless of button disable success
     latestSourcesByBotMsg.delete(id);
-  }
-  
-  // Also clean up jump message map
-  for (const [jumpId, jumpData] of jumpMessageMap.entries()) {
-    if (jumpData.timestamp < cutoff) {
-      jumpMessageMap.delete(jumpId);
-    }
   }
 }, 10 * 60 * 1000);
 
@@ -504,10 +491,11 @@ IMPORTANT: Only flag TRUE contradictions where both statements cannot possibly b
 - Different aspects of complex issues
 
 Always reply in strict JSON of the form:
-{"contradiction":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
-- "contradiction": Use "yes" ONLY if the new message is absolutely logically incompatible with a prior message (both cannot be true). Examples: "X is true" vs "X is false", "All Y are Z" vs "No Y are Z", "A happened" vs "A never happened". Use "no" for different opinions, nuanced disagreements, or clarifications.
-- "reason": For "yes", state the logical incompatibility clearly, e.g., "Objects cannot be both spherical and flat," or "Events cannot both happen and never happen." For "no", use an empty string.
-- "evidence": For "yes", provide the EXACT quoted contents of the user's prior message that creates the logical contradiction. Quote exactly - do not paraphrase. For "no", use an empty string.
+{"contradiction":"yes"|"no", "reason":"...", "evidence":"...", "contradicting":"...", "url":"..."}
+- "contradiction": Use "yes" ONLY if statements are absolutely logically incompatible (both cannot be true). This includes cross-message contradictions (current message vs previous messages) AND self-contradictions (contradictory statements within the current message itself). Examples: "X is true" vs "X is false", "All Y are Z" vs "No Y are Z", "A happened" vs "A never happened". Use "no" for different opinions, nuanced disagreements, or clarifications.
+- "reason": For "yes", explain precisely WHY these statements cannot both be true simultaneously. Focus on the logical impossibility and make it clear to any reader. Example: "A single entity cannot simultaneously exist and not exist" or "An event cannot both occur and never occur at the same time." For "no", use an empty string.
+- "evidence": For "yes", provide the EXACT first/earlier contradicted statement. For cross-message: quote from previous message. For self-contradiction: quote the first contradictory segment from current message. Quote exactly - do not paraphrase. For "no", use an empty string.
+- "contradicting": For "yes", provide the EXACT second/later contradicting statement. For cross-message: quote from current message. For self-contradiction: quote the second contradictory segment from current message. Quote exactly - do not paraphrase. For "no", use an empty string.
 - "url": For "yes", include a direct Discord link to the contradictory message (format: https://discord.com/channels/<server_id>/<channel_id>/<message_id>). For "no", use an empty string.
 In all cases, never reply with non-JSON or leave any field out. If you do not find a TRUE logical contradiction, respond "contradiction":"no".
 [Previous statements]
@@ -563,7 +551,7 @@ ${mainContent}
   
   // ---- MISINFORMATION CHECK ----
   console.log(`[DEBUG] Contradiction result: ${contradiction ? 'FOUND' : 'NONE'}, proceeding to misinformation check`);
-  if (!contradiction) {
+  // Always check misinformation regardless of contradiction status
     const mainContent =
       msg.content.length > MAX_FACTCHECK_CHARS
         ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
@@ -615,7 +603,7 @@ ${answer.answer}
     } catch (e) {
       console.warn("Misinformation detection error:", e);
     }
-  }
+  
   return { contradiction, misinformation };
 }
 
@@ -650,19 +638,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
   
-  // Handle jump buttons
-  if (interaction.customId.startsWith(JUMP_BUTTON_ID)) {
-    const jumpId = interaction.customId.split(':')[1];
-    const jumpData = jumpMessageMap.get(jumpId);
-    
-    if (!jumpData) {
-      await interaction.reply({ content: "Jump link has expired.", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    
-    await interaction.reply({ content: `[Jump to contradictory message](${jumpData.url})`, flags: MessageFlags.Ephemeral });
-    return;
-  }
+
 });
 
 client.on("messageCreate", async (msg) => {
@@ -721,13 +697,55 @@ client.on("messageCreate", async (msg) => {
         console.warn("Detection failure (silent to user):", e);
       }
       if (detection) {
-        // CONTRADICTION DETECTED (with jump button if present)
-        if (detection.contradiction && detection.contradiction.contradiction === "yes") {
+        const hasContradiction = detection.contradiction && detection.contradiction.contradiction === "yes";
+        const hasMisinformation = detection.misinformation && detection.misinformation.misinformation === "yes";
+        
+        // Handle combined detection or individual detection
+        if (hasContradiction && hasMisinformation) {
+          // BOTH detected - combine into single message
+          const combinedReply = 
+            `⚡🚩 **CONTRADICTION & MISINFORMATION DETECTED** 🚩⚡\n\n` +
+            `**CONTRADICTION FOUND:**\n` +
+            `\`\`\`${detection.contradiction.evidence}\`\`\`\n` +
+            `\`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n` +
+            `${detection.contradiction.reason}\n\n` +
+            `**MISINFORMATION FOUND:**\n` +
+            `**False claim:** ${msg.content}\n` +
+            `**Why false:** ${detection.misinformation.reason}\n` +
+            (detection.misinformation.evidence ? `**Fact-check evidence:** ${detection.misinformation.evidence}` : "");
+          
+          const evidenceUrl = detection.contradiction.url || "";
+          const misinfoUrl = detection.misinformation.url || "";
+          const allSources = [misinfoUrl].filter(Boolean);
+          
+          if (evidenceUrl && allSources.length > 0) {
+            // Both jump button and sources button
+            await msg.reply({
+              content: truncateMessage(combinedReply),
+              components: [makeJumpButton(evidenceUrl), makeSourcesButton(allSources, `${Date.now()}-combined`)]
+            });
+            latestSourcesByBotMsg.set(`${Date.now()}-combined`, { urls: allSources, timestamp: Date.now() });
+          } else if (evidenceUrl) {
+            // Just jump button
+            await msg.reply({
+              content: truncateMessage(combinedReply),
+              components: [makeJumpButton(evidenceUrl)]
+            });
+          } else if (allSources.length > 0) {
+            // Just sources button
+            await replyWithSourcesButton(msg, { content: truncateMessage(combinedReply) }, allSources, latestSourcesByBotMsg);
+          } else {
+            // No buttons
+            await msg.reply(truncateMessage(combinedReply));
+          }
+          
+        } else if (hasContradiction) {
+          // CONTRADICTION ONLY
           const contradictionReply = 
-            `⚡ **CONTRADICTION DETECTED** ⚡\n` +
-            `This message contradicts a prior statement you made:\n` +
-            `> ${detection.contradiction.evidence}\n` +
-            `Reason: ${detection.contradiction.reason}`;
+            `⚡ **CONTRADICTION DETECTED** ⚡\n\n` +
+            `\`\`\`${detection.contradiction.evidence}\`\`\`\n` +
+            `\`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n` +
+            `${detection.contradiction.reason}`;
           
           const evidenceUrl = detection.contradiction.url || "";
           
@@ -739,7 +757,9 @@ client.on("messageCreate", async (msg) => {
           } else {
             await msg.reply(truncateMessage(contradictionReply));
           }
-        } else if (detection.misinformation && detection.misinformation.misinformation === "yes") {
+          
+        } else if (hasMisinformation) {
+          // MISINFORMATION ONLY  
           const misinfoReply = 
             `🚩 **MISINFORMATION DETECTED** 🚩\n` +
             `Reason: ${detection.misinformation.reason}\n` +
