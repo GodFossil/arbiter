@@ -249,15 +249,40 @@ function analyzeLogicalContent(content, cache = null) {
   // Calculate substantiveness score (0-1)
   let substantiveness = 0.5; // Base score
   
-  // Factors that increase substantiveness
+  // High-impact topics that always need analysis (medical, scientific, political)
+  const highImpactTopics = [
+    'vaccine', 'medicine', 'drug', 'treatment', 'cure', 'disease', 'health', 'covid', 'cancer',
+    'climate', 'global warming', 'earth', 'evolution', 'science', 'study', 'research',
+    'election', 'vote', 'government', 'conspiracy', 'holocaust', 'assassination'
+  ];
+  
+  const hasHighImpactTopic = highImpactTopics.some(topic => lowerContent.includes(topic));
+  if (hasHighImpactTopic) {
+    substantiveness += 0.4; // Significant boost for important topics
+  }
+  
+  // Definitive claims (including negative claims)
+  const definitiveMarkers = [
+    'don\'t work', 'doesn\'t work', 'do not work', 'does not work',
+    'cause', 'causes', 'prevent', 'prevents', 'cure', 'cures',
+    'are dangerous', 'is dangerous', 'are safe', 'is safe',
+    'never', 'always', 'all', 'none', 'every', 'no'
+  ];
+  
+  const hasDefinitiveClaim = definitiveMarkers.some(marker => lowerContent.includes(marker));
+  if (hasDefinitiveClaim) {
+    substantiveness += 0.3;
+  }
+  
+  // Standard factors that increase substantiveness
   if (analysis.hasEvidence) substantiveness += 0.2;
   if (analysis.hasAbsolutes) substantiveness += 0.1;
   if (content.length > 50) substantiveness += 0.1;
   if (content.includes('because') || content.includes('therefore') || content.includes('thus')) substantiveness += 0.1;
   
-  // Factors that decrease substantiveness  
+  // Factors that decrease substantiveness (but don't penalize high-impact topics as much)
   if (analysis.hasUncertainty) substantiveness -= 0.1;
-  if (content.length < 20) substantiveness -= 0.2;
+  if (content.length < 20 && !hasHighImpactTopic) substantiveness -= 0.1; // Reduced penalty for short high-impact claims
   
   analysis.substantiveness = Math.max(0, Math.min(1, substantiveness));
   
