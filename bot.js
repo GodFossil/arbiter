@@ -143,6 +143,7 @@ const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
 const MAX_FACTCHECK_CHARS = 500;
 const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
+const USE_LOGICAL_PRINCIPLES = true; // TODO: Make this configurable for testing
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -395,10 +396,10 @@ function makeJumpButton(jumpUrl) {
 let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
 
 setInterval(async () => {
-  // Clean up after 1 hour
-  const cutoff = Date.now() - 3600 * 1000;
+  const cutoff = Date.now() - 3600 * 1000; // 1 hour cutoff
   const expiredEntries = [];
   
+  // Clean up source button mappings
   for (const [id, obj] of latestSourcesByBotMsg.entries()) {
     if (obj.timestamp < cutoff) {
       expiredEntries.push(id);
@@ -438,24 +439,34 @@ setInterval(async () => {
     latestSourcesByBotMsg.delete(id);
   }
   
-  // Clean up analysis caches
-  const analysisKeys = [...contentAnalysisCache.keys()];
-  analysisKeys.forEach(key => {
-    const cached = contentAnalysisCache.get(key);
+  // Clean up history cache with TTL
+  const historyTTL = Date.now() - HISTORY_TTL_MS;
+  for (const [key, cached] of historyCache.user.entries()) {
+    if (cached.time < historyTTL) {
+      historyCache.user.delete(key);
+    }
+  }
+  for (const [key, cached] of historyCache.channel.entries()) {
+    if (cached.time < historyTTL) {
+      historyCache.channel.delete(key);
+    }
+  }
+  
+  // Clean up analysis caches with TTL
+  for (const [key, cached] of contentAnalysisCache.entries()) {
     if (cached && (Date.now() - cached.timestamp > ANALYSIS_CACHE_TTL_MS)) {
       contentAnalysisCache.delete(key);
     }
-  });
+  }
   
-  const validationKeys = [...contradictionValidationCache.keys()];
-  validationKeys.forEach(key => {
-    // Validation cache has no timestamp, clean after 1 hour
-    if (contradictionValidationCache.size > 1000) { // Prevent memory bloat
-      contradictionValidationCache.clear();
-    }
-  });
+  // Clean up validation cache when it grows too large
+  if (contradictionValidationCache.size > 1000) {
+    console.log(`[DEBUG] Clearing validation cache (${contradictionValidationCache.size} entries)`);
+    contradictionValidationCache.clear();
+  }
   
-}, 10 * 60 * 1000);
+  console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, user_history=${historyCache.user.size}, channel_history=${historyCache.channel.size}, analysis=${contentAnalysisCache.size}, validation=${contradictionValidationCache.size}`);
+}, 5 * 60 * 1000); // Run every 5 minutes instead of 10
 
 // ---- MEMORY SAVE WITH META ----
 async function saveUserMessage(msg) {
@@ -552,8 +563,18 @@ async function handleAdminCommands(msg) {
   if (msg.content === "!arbiter_reset_all") {
     try {
       const db = await connect();
+      // Clear all database collections
       await db.collection("messages").deleteMany({});
-      await msg.reply("All memory erased. Arbiter reset to blank slate.");
+      
+      // Clear all in-memory caches
+      historyCache.user.clear();
+      historyCache.channel.clear();
+      contentAnalysisCache.clear();
+      contradictionValidationCache.clear();
+      latestSourcesByBotMsg.clear();
+      
+      console.log("[ADMIN] Complete memory reset performed by guild owner");
+      await msg.reply("🗑️ **COMPLETE RESET PERFORMED**\n\n• All MongoDB message history deleted\n• All in-memory caches cleared\n• Arbiter reset to blank slate");
       return true;
     } catch (e) {
       console.warn("[MODLOG] Failed to erase all memory.", e);
@@ -665,8 +686,7 @@ async function detectContradictionOrMisinformation(msg) {
   let contradictionEvidenceUrl = "";
   let misinformation = null;
 
-  // Test: Try without logical principles to see if they're helping or hurting
-  const useLogicalPrinciples = false; // TODO: Make this configurable for testing
+  // Using global configuration for logical principles
 
   console.log(`[DEBUG] Starting detection for: "${msg.content}"`);
   
@@ -734,9 +754,9 @@ async function detectContradictionOrMisinformation(msg) {
     const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${useLogicalPrinciples ? getLogicalContext('contradiction', { contentAnalysis }) : ''}
+${USE_LOGICAL_PRINCIPLES ? getLogicalContext('contradiction', { contentAnalysis }) : ''}
 
-You are a precise contradiction detector for debate analysis.${useLogicalPrinciples ? ' You have access to advanced logical principles above.' : ''}
+You are a precise contradiction detector for debate analysis.${USE_LOGICAL_PRINCIPLES ? ' You have access to advanced logical principles above.' : ''}
 
 CONTENT ANALYSIS INSIGHTS:
 - Uncertainty level: ${contentAnalysis.hasUncertainty ? 'HIGH' : 'LOW'}
@@ -864,9 +884,9 @@ ${mainContent}
     const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${useLogicalPrinciples ? getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis }) : ''}
+${USE_LOGICAL_PRINCIPLES ? getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis }) : ''}
 
-You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.${useLogicalPrinciples ? ' You have access to logical principles above.' : ''}
+You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.${USE_LOGICAL_PRINCIPLES ? ' You have access to logical principles above.' : ''}
 
 CONTENT ANALYSIS FOR FACT-CHECKING:
 - User certainty level: ${misinfoContentAnalysis.hasUncertainty ? 'UNCERTAIN (less likely to be misinformation)' : 'DEFINITIVE'}
@@ -1189,10 +1209,10 @@ client.on("messageCreate", async (msg) => {
           const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${useLogicalPrinciples ? getLogicalContext('general') : ''}
+${USE_LOGICAL_PRINCIPLES ? getLogicalContext('general') : ''}
 
 Today is ${dateString}.
-Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${useLogicalPrinciples ? ' Apply the logical principles above to enhance your reasoning and maintain consistency.' : ''}${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
+Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${USE_LOGICAL_PRINCIPLES ? ' Apply the logical principles above to enhance your reasoning and maintain consistency.' : ''}${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
 - Do not use ambiguous hedging or "on the one hand/on the other hand" language unless it is genuinely necessary.
 - Favor declarative, direct statements. When a position is unsupported, say so clearly and confidently.
 - Avoid generic phrases such as "It is important to note...", "It depends...", or "While both sides...".
@@ -1231,7 +1251,7 @@ ${referencedSection}
     // ---- Send reply, platform source button if URLs exist ----
     console.log('[DEBUG] sourcesUsed:', sourcesUsed);
 try {
-  filteredSources = [...new Set(sourcesUsed
+  const filteredSources = [...new Set(sourcesUsed
     .map(u => cleanUrl(u))
     .filter(u => typeof u === "string" && u.startsWith("http")))];
   if (filteredSources.length > 0) {
