@@ -3,7 +3,7 @@ const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
 const { connect } = require("./mongo");
 const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
-const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logical-principles");
+const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logic");
 const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -547,7 +547,8 @@ async function handleAdminCommands(msg) {
         `• Uncertainty markers: ${analysis.hasUncertainty ? '✅' : '❌'}\n` +
         `• Temporal qualifiers: ${analysis.hasTemporal ? '✅' : '❌'}\n` +
         `• Absolute claims: ${analysis.hasAbsolutes ? '✅' : '❌'}\n` +
-        `• Evidence indicators: ${analysis.hasEvidence ? '✅' : '❌'}\n\n` +
+        `• Evidence indicators: ${analysis.hasEvidence ? '✅' : '❌'}\n` +
+        `• Substantiveness score: ${analysis.substantiveness.toFixed(2)}\n\n` +
         (analysis.recommendations.length > 0 ? 
           `**Recommendations:**\n${analysis.recommendations.map(r => `• ${r}`).join('\n')}` : 
           `**No specific recommendations**`)
@@ -556,6 +557,29 @@ async function handleAdminCommands(msg) {
     } catch (e) {
       console.warn("[MODLOG] Failed to analyze content.", e);
       await msg.reply("Analysis proves elusive.");
+      return true;
+    }
+  }
+  if (msg.content.startsWith("!arbiter_principle ")) {
+    try {
+      const principleName = msg.content.replace("!arbiter_principle ", "").trim();
+      const principle = getSpecificPrinciple(principleName);
+      
+      if (!principle) {
+        await msg.reply(`📚 **Available Principles:**\nnonContradiction, excludedMiddle, identity\n\nUsage: \`!arbiter_principle nonContradiction\``);
+        return true;
+      }
+      
+      await msg.reply(
+        `📜 **${principle.name}**\n\n` +
+        `**Principle:** ${principle.principle}\n\n` +
+        `**Application:** ${principle.application}\n\n` +
+        `**Examples:**\n${principle.examples.map(ex => `• ${ex}`).join('\n')}`
+      );
+      return true;
+    } catch (e) {
+      console.warn("[MODLOG] Failed to get principle.", e);
+      await msg.reply("Wisdom remains hidden.");
       return true;
     }
   }
@@ -588,7 +612,7 @@ async function exaAnswer(query) {
   }
 }
 
-async function exaSearch(query, numResults = 5) {
+async function exaSearch(query, numResults = 10) {
   try {
     const res = await axios.post(
       "https://api.exa.ai/search",
@@ -679,12 +703,15 @@ async function detectContradictionOrMisinformation(msg) {
       return { contradiction: null, misinformation: null };
     }
     
+    // Test: Try without logical principles to see if they're helping or hurting
+    const useLogicalPrinciples = false; // TODO: Make this configurable for testing
+    
     const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${getLogicalContext('contradiction', { contentAnalysis })}
+${useLogicalPrinciples ? getLogicalContext('contradiction', { contentAnalysis }) : ''}
 
-You are a precise contradiction detector for debate analysis with access to advanced logical principles.
+You are a precise contradiction detector for debate analysis.${useLogicalPrinciples ? ' You have access to advanced logical principles above.' : ''}
 
 CONTENT ANALYSIS INSIGHTS:
 - Uncertainty level: ${contentAnalysis.hasUncertainty ? 'HIGH' : 'LOW'}
@@ -748,10 +775,6 @@ ${mainContent}
             console.log(`[DEBUG] Rejecting contradiction due to invalid evidence matching`);
             contradiction = null; // Reject invalid contradictions
           } else {
-            // Verify the contradiction makes sense
-            const evidenceText = evidenceMsg.content.toLowerCase();
-            const currentText = msg.content.toLowerCase();
-            
             // Advanced semantic validation to prevent false contradictions (with caching)
             const validationKey = `${evidenceMsg.content}|${msg.content}`;
             let isValidContradiction = contradictionValidationCache.get(validationKey);
@@ -816,9 +839,9 @@ ${mainContent}
     const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis })}
+${useLogicalPrinciples ? getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis }) : ''}
 
-You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.
+You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.${useLogicalPrinciples ? ' You have access to logical principles above.' : ''}
 
 CONTENT ANALYSIS FOR FACT-CHECKING:
 - User certainty level: ${misinfoContentAnalysis.hasUncertainty ? 'UNCERTAIN (less likely to be misinformation)' : 'DEFINITIVE'}
@@ -1126,10 +1149,10 @@ client.on("messageCreate", async (msg) => {
           const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${getLogicalContext('general')}
+${useLogicalPrinciples ? getLogicalContext('general') : ''}
 
 Today is ${dateString}.
-Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results. Apply the logical principles above to enhance your reasoning and maintain consistency.${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
+Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${useLogicalPrinciples ? ' Apply the logical principles above to enhance your reasoning and maintain consistency.' : ''}${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
 - Do not use ambiguous hedging or "on the one hand/on the other hand" language unless it is genuinely necessary.
 - Favor declarative, direct statements. When a position is unsupported, say so clearly and confidently.
 - Avoid generic phrases such as "It is important to note...", "It depends...", or "While both sides...".

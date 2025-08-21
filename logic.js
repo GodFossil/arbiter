@@ -11,7 +11,7 @@ const FOUNDATIONAL_LOGIC = {
     application: "When evaluating conflicting claims, at least one must be false",
     examples: ["'A exists' and 'A does not exist' cannot both be true", "'All X are Y' and 'Some X are not Y' are contradictory"]
   },
-  
+
   excludedMiddle: {
     name: "Law of Excluded Middle", 
     principle: "For any factual proposition P, either P is true or P is false",
@@ -231,11 +231,11 @@ function analyzeLogicalContent(content, cache = null) {
   const lowerContent = content.toLowerCase();
   
   // Check for uncertainty markers
-  const uncertaintyMarkers = ['maybe', 'perhaps', 'possibly', 'might', 'could', 'i think', 'seems'];
+  const uncertaintyMarkers = ['maybe', 'perhaps', 'possibly', 'might', 'could', 'i think', 'i believe', 'seems like', 'appears'];
   analysis.hasUncertainty = uncertaintyMarkers.some(marker => lowerContent.includes(marker));
   
   // Check for temporal markers
-  const temporalMarkers = ['always', 'never', 'used to', 'previously', 'now', 'currently', 'will'];
+  const temporalMarkers = ['used to', 'previously', 'before', 'now', 'currently', 'today', 'at first', 'initially', 'later', 'then'];
   analysis.hasTemporal = temporalMarkers.some(marker => lowerContent.includes(marker));
   
   // Check for absolute claims
