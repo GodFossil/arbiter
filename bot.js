@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
-const { connect } = require("./mongo");
+const { connect, resetDatabase } = require("./mongo");
 const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
 const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logic");
 const axios = require("axios");
@@ -562,9 +562,8 @@ async function handleAdminCommands(msg) {
   if (msg.author.id !== ownerId) return false;
   if (msg.content === "!arbiter_reset_all") {
     try {
-      const db = await connect();
-      // Clear all database collections
-      await db.collection("messages").deleteMany({});
+      // Completely reset the database structure
+      await resetDatabase();
       
       // Clear all in-memory caches
       historyCache.user.clear();
@@ -573,12 +572,12 @@ async function handleAdminCommands(msg) {
       contradictionValidationCache.clear();
       latestSourcesByBotMsg.clear();
       
-      console.log("[ADMIN] Complete memory reset performed by guild owner");
-      await msg.reply("🗑️ **COMPLETE RESET PERFORMED**\n\n• All MongoDB message history deleted\n• All in-memory caches cleared\n• Arbiter reset to blank slate");
+      console.log("[ADMIN] Complete database and memory reset performed by guild owner");
+      await msg.reply("🗑️ **COMPLETE SYSTEM RESET PERFORMED**\n\n• MongoDB database completely dropped and recreated\n• All collections, indexes, and artifacts removed\n• Fresh database structure initialized\n• All in-memory caches cleared\n• Arbiter reset to pristine state");
       return true;
     } catch (e) {
-      console.warn("[MODLOG] Failed to erase all memory.", e);
-      await msg.reply("The void resists being emptied.");
+      console.warn("[MODLOG] Failed to reset database structure.", e);
+      await msg.reply("The void resists complete reformation. Database structure may be partially reset.");
       return true;
     }
   }

@@ -45,4 +45,29 @@ async function createIndexes(db) {
   }
 }
 
-module.exports = { connect };
+async function resetDatabase() {
+  try {
+    if (!db) {
+      await client.connect();
+    }
+    
+    // Drop the entire database to remove all collections, indexes, and artifacts
+    const dbName = "arbiter-memory";
+    await client.db(dbName).dropDatabase();
+    console.log(`[MONGO] Database '${dbName}' completely dropped`);
+    
+    // Reset the db reference so it gets recreated with fresh indexes
+    db = null;
+    
+    // Reconnect and recreate the database structure
+    await connect();
+    console.log(`[MONGO] Database '${dbName}' recreated with fresh structure`);
+    
+    return true;
+  } catch (error) {
+    console.error("[MONGO] Database reset failed:", error);
+    throw error;
+  }
+}
+
+module.exports = { connect, resetDatabase };
