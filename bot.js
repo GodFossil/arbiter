@@ -557,10 +557,23 @@ Summary:
 
 // ---- ADMIN: FULL RESET ----
 async function handleAdminCommands(msg) {
-  if (!msg.guild) return false;
+  console.log(`[DEBUG] Admin command check: "${msg.content}" from user ${msg.author.id}`);
+  
+  if (!msg.guild) {
+    console.log("[DEBUG] No guild found - not a server message");
+    return false;
+  }
+  
   const ownerId = msg.guild.ownerId || (await msg.guild.fetchOwner()).id;
-  if (msg.author.id !== ownerId) return false;
+  console.log(`[DEBUG] Guild owner: ${ownerId}, Message author: ${msg.author.id}`);
+  
+  if (msg.author.id !== ownerId) {
+    console.log("[DEBUG] User is not guild owner - admin command denied");
+    return false;
+  }
+  
   if (msg.content === "!arbiter_reset_all") {
+    console.log("[DEBUG] Reset command matched - executing database reset");
     try {
       // Completely reset the database structure
       await resetDatabase();
@@ -976,12 +989,12 @@ client.on("messageCreate", async (msg) => {
     !isBotActiveInChannel(msg)
   ) return;
 
-  // Ignore trivial content or known other bot commands
-  if (isOtherBotCommand(msg.content) || isTrivialOrSafeMessage(msg.content)) return;
-
-  // Handle admin command (memory wipe)
+  // Handle admin commands FIRST (before any filtering)
   const handled = await handleAdminCommands(msg);
   if (handled) return;
+
+  // Ignore trivial content or known other bot commands
+  if (isOtherBotCommand(msg.content) || isTrivialOrSafeMessage(msg.content)) return;
 
     // Store the message!
   let thisMsgId = null;
