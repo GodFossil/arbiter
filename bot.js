@@ -1014,8 +1014,8 @@ client.on("messageCreate", async (msg) => {
           const combinedReply = 
             `⚡🚩 **CONTRADICTION & MISINFORMATION DETECTED** 🚩⚡\n\n` +
             `**CONTRADICTION FOUND:**\n` +
-            `\`\`\`${detection.contradiction.evidence}\`\`\`\n` +
-            `\`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n` +
+            `-# \`\`\`${detection.contradiction.evidence}\`\`\`\n` +
+            `-# \`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n` +
             `${detection.contradiction.reason}\n\n` +
             `**MISINFORMATION FOUND:**\n` +
             `**False claim:** ${msg.content}\n` +
@@ -1065,9 +1065,9 @@ client.on("messageCreate", async (msg) => {
         } else if (hasContradiction) {
           // CONTRADICTION ONLY
           const contradictionReply = 
-            `⚡ **CONTRADICTION DETECTED** ⚡\n\n` +
-            `\`\`\`${detection.contradiction.evidence}\`\`\`\n` +
-            `\`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n\n` +
+            `⚡ **CONTRADICTION DETECTED** ⚡️\n\n` +
+            `-# \`\`\`${detection.contradiction.evidence}\`\`\`\n` +
+            `-# \`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n\n` +
             `${detection.contradiction.reason}`;
           
           const evidenceUrl = detection.contradiction.url || "";
