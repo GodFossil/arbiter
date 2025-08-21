@@ -640,6 +640,9 @@ async function detectContradictionOrMisinformation(msg) {
   let contradictionEvidenceUrl = "";
   let misinformation = null;
 
+  // Test: Try without logical principles to see if they're helping or hurting
+  const useLogicalPrinciples = false; // TODO: Make this configurable for testing
+
   console.log(`[DEBUG] Starting detection for: "${msg.content}"`);
   
   // Trivial message & other bot command skip for contradiction/misinformation:
@@ -702,9 +705,6 @@ async function detectContradictionOrMisinformation(msg) {
       console.log(`[DEBUG] Low substantiveness (${contentAnalysis.substantiveness}) - skipping expensive AI analysis`);
       return { contradiction: null, misinformation: null };
     }
-    
-    // Test: Try without logical principles to see if they're helping or hurting
-    const useLogicalPrinciples = false; // TODO: Make this configurable for testing
     
     const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
