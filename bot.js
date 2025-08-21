@@ -220,6 +220,31 @@ function validateContradiction(statement1, statement2) {
     return false;
   }
   
+  // Topic relevance check - statements must be about the same subject
+  const topics = {
+    vaccines: ['vaccine', 'vaccination', 'immunization', 'shot', 'jab'],
+    elections: ['election', 'vote', 'trump', 'biden', 'president', 'electoral'],
+    earth: ['earth', 'planet', 'world', 'globe', 'flat', 'round', 'sphere'],
+    climate: ['climate', 'global warming', 'temperature', 'carbon', 'emissions'],
+    health: ['health', 'medicine', 'drug', 'treatment', 'cure', 'disease'],
+    ghosts: ['ghost', 'spirit', 'supernatural', 'paranormal', 'haunted'],
+    aliens: ['alien', 'ufo', 'extraterrestrial', 'space', 'abduction'],
+    science: ['science', 'scientific', 'research', 'study', 'experiment'],
+    religion: ['god', 'jesus', 'christian', 'islam', 'religion', 'faith', 'bible']
+  };
+  
+  let s1Topic = null, s2Topic = null;
+  
+  for (const [topicName, keywords] of Object.entries(topics)) {
+    if (keywords.some(keyword => s1.includes(keyword))) s1Topic = topicName;
+    if (keywords.some(keyword => s2.includes(keyword))) s2Topic = topicName;
+  }
+  
+  if (s1Topic && s2Topic && s1Topic !== s2Topic) {
+    console.log(`[DEBUG] Topic mismatch: "${s1Topic}" vs "${s2Topic}" - not a valid contradiction`);
+    return false;
+  }
+  
   // Check for negation patterns that indicate TRUE contradictions
   const negationPatterns = [
     // Direct negation pairs
@@ -1002,12 +1027,27 @@ client.on("messageCreate", async (msg) => {
           const allSources = [misinfoUrl].filter(Boolean);
           
           if (evidenceUrl && allSources.length > 0) {
-            // Both jump button and sources button
-            await msg.reply({
+            // Both jump button and sources button  
+            const combinedId = `${Date.now()}-combined`;
+            // Create combined button row (side-by-side)
+            const combinedButtonRow = new ActionRowBuilder().addComponents([
+              new ButtonBuilder()
+                .setURL(evidenceUrl)
+                .setStyle(ButtonStyle.Link)
+                .setEmoji('🔗'),
+              new ButtonBuilder()
+                .setCustomId(`${SOURCE_BUTTON_ID}:${combinedId}`)
+                .setLabel('\u{1D48A}')
+                .setStyle(ButtonStyle.Primary)
+                .setDisabled(false)
+            ]);
+            
+            const replyMsg = await msg.reply({
               content: truncateMessage(combinedReply),
-              components: [makeJumpButton(evidenceUrl), makeSourcesButton(allSources, `${Date.now()}-combined`)]
+              components: [combinedButtonRow]
             });
-            latestSourcesByBotMsg.set(`${Date.now()}-combined`, { urls: allSources, timestamp: Date.now() });
+            latestSourcesByBotMsg.set(combinedId, { urls: allSources, timestamp: Date.now() });
+            latestSourcesByBotMsg.set(replyMsg.id, { urls: allSources, timestamp: Date.now() });
           } else if (evidenceUrl) {
             // Just jump button
             await msg.reply({
