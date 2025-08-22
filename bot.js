@@ -133,11 +133,75 @@ function isOtherBotCommand(content) {
   );
 }
 
+// ---- LRU CACHE IMPLEMENTATION ----
+class LRUCache {
+  constructor(maxSize) {
+    this.maxSize = maxSize;
+    this.cache = new Map();
+  }
+  
+  get(key) {
+    if (this.cache.has(key)) {
+      // Move to end (most recently used)
+      const value = this.cache.get(key);
+      this.cache.delete(key);
+      this.cache.set(key, value);
+      return value;
+    }
+    return null;
+  }
+  
+  set(key, value) {
+    if (this.cache.has(key)) {
+      // Update existing key
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      // Remove least recently used (first item)
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    this.cache.set(key, value);
+  }
+  
+  delete(key) {
+    return this.cache.delete(key);
+  }
+  
+  clear() {
+    this.cache.clear();
+  }
+  
+  get size() {
+    return this.cache.size;
+  }
+  
+  // Add a message to the appropriate cache entries
+  addMessage(msg) {
+    const userKey = `user:${msg.user}:${msg.channel}:${msg.guildId}`;
+    const channelKey = `channel:${msg.channel}:${msg.guildId}`;
+    
+    // Get existing arrays or create new ones
+    let userMessages = this.get(userKey) || [];
+    let channelMessages = this.get(channelKey) || [];
+    
+    // Add new message to front (most recent)
+    userMessages.unshift(msg);
+    channelMessages.unshift(msg);
+    
+    // Keep only the most recent N messages
+    userMessages = userMessages.slice(0, 20); // Keep 20 user messages
+    channelMessages = channelMessages.slice(0, 50); // Keep 50 channel messages
+    
+    // Update cache
+    this.set(userKey, userMessages);
+    this.set(channelKey, channelMessages);
+  }
+}
+
 // ---- TUNEABLE PARAMETERS ----
-const historyCache = { user: new Map(), channel: new Map() };
+const messageCache = new LRUCache(1000); // Cache up to 1000 different query results
 const contentAnalysisCache = new Map(); // Cache content analysis results
 const contradictionValidationCache = new Map(); // Cache validation results
-const HISTORY_TTL_MS = 4000;
 const ANALYSIS_CACHE_TTL_MS = 60000; // 1 minute TTL for analysis cache
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
@@ -331,34 +395,67 @@ function validateContradiction(statement1, statement2) {
   return true;
 }
 
-// ---- HISTORY UTILS ----
+// ---- HISTORY UTILS WITH LRU CACHE ----
 async function fetchUserHistory(userId, channelId, guildId, limit = 7, excludeMsgId = null) {
-  const key = `${userId}:${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
-  const now = Date.now();
-  const cached = historyCache.user.get(key);
-  if (cached && (now - cached.time < HISTORY_TTL_MS)) return cached.data;
+  const cacheKey = `user:${userId}:${channelId}:${guildId}`;
+  
+  // Try cache first
+  let cachedMessages = messageCache.get(cacheKey) || [];
+  
+  // Filter out excluded message if specified
+  if (excludeMsgId) {
+    cachedMessages = cachedMessages.filter(m => m._id?.toString() !== excludeMsgId);
+  }
+  
+  // If we have enough cached messages, return them
+  if (cachedMessages.length >= limit) {
+    console.log(`[CACHE HIT] User history for ${userId} (${cachedMessages.length} cached messages)`);
+    return cachedMessages.slice(0, limit);
+  }
+  
+  // Cache miss or insufficient data - fetch from MongoDB
+  console.log(`[CACHE MISS] User history for ${userId} - fetching from MongoDB`);
   const db = await connect();
   const query = { type: "message", user: userId, channel: channelId, guildId };
   if (excludeMsgId) query._id = { $ne: excludeMsgId };
+  
   const data = await db.collection("messages")
     .find(query)
     .sort({ ts: -1 })
-    .limit(limit)
+    .limit(Math.max(limit, 20)) // Fetch extra for better caching
     .toArray();
-  historyCache.user.set(key, { time: now, data });
-  return data;
+  
+  // Update cache with fresh data
+  messageCache.set(cacheKey, data);
+  
+  return data.slice(0, limit);
 }
 async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId = null) {
-  const key = `${channelId}:${guildId}:${limit}:${excludeMsgId || ""}`;
-  const now = Date.now();
-  const cached = historyCache.channel.get(key);
-  if (cached && (now - cached.time < HISTORY_TTL_MS)) return cached.data;
+  const cacheKey = `channel:${channelId}:${guildId}`;
+  
+  // Try cache first
+  let cachedMessages = messageCache.get(cacheKey) || [];
+  
+  // Filter out excluded message if specified
+  if (excludeMsgId) {
+    cachedMessages = cachedMessages.filter(m => m._id?.toString() !== excludeMsgId);
+  }
+  
+  // If we have enough cached messages, return them
+  if (cachedMessages.length >= limit) {
+    console.log(`[CACHE HIT] Channel history for ${channelId} (${cachedMessages.length} cached messages)`);
+    return cachedMessages.slice(0, limit);
+  }
+  
+  // Cache miss or insufficient data - fetch from MongoDB
+  console.log(`[CACHE MISS] Channel history for ${channelId} - fetching from MongoDB`);
   const db = await connect();
+  
   const [full, summaries] = await Promise.all([
     db.collection("messages")
       .find({ type: "message", channel: channelId, guildId, content: { $exists: true }, ...(excludeMsgId && { _id: { $ne: excludeMsgId } }) })
       .sort({ ts: -1 })
-      .limit(limit)
+      .limit(Math.max(limit, 50)) // Fetch extra for better caching
       .toArray(),
     db.collection("messages")
       .find({ type: "summary", channel: channelId, guildId })
@@ -366,9 +463,13 @@ async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId =
       .limit(3)
       .toArray()
   ]);
+  
   const result = [...summaries.reverse(), ...full.reverse()];
-  historyCache.channel.set(key, { time: now, data: result });
-  return result;
+  
+  // Update cache with fresh data (messages only, not summaries for simplicity)
+  messageCache.set(cacheKey, full);
+  
+  return result.slice(0, limit + summaries.length);
 }
 
 // Button logic  
@@ -439,18 +540,7 @@ setInterval(async () => {
     latestSourcesByBotMsg.delete(id);
   }
   
-  // Clean up history cache with TTL
-  const historyTTL = Date.now() - HISTORY_TTL_MS;
-  for (const [key, cached] of historyCache.user.entries()) {
-    if (cached.time < historyTTL) {
-      historyCache.user.delete(key);
-    }
-  }
-  for (const [key, cached] of historyCache.channel.entries()) {
-    if (cached.time < historyTTL) {
-      historyCache.channel.delete(key);
-    }
-  }
+  // LRU cache is self-managing, no TTL cleanup needed
   
   // Clean up analysis caches with TTL
   for (const [key, cached] of contentAnalysisCache.entries()) {
@@ -465,7 +555,7 @@ setInterval(async () => {
     contradictionValidationCache.clear();
   }
   
-  console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, user_history=${historyCache.user.size}, channel_history=${historyCache.channel.size}, analysis=${contentAnalysisCache.size}, validation=${contradictionValidationCache.size}`);
+  console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, messages=${messageCache.size}, analysis=${contentAnalysisCache.size}, validation=${contradictionValidationCache.size}`);
 }, 5 * 60 * 1000); // Run every 5 minutes instead of 10
 
 // ---- MEMORY SAVE WITH META ----
@@ -486,6 +576,10 @@ async function saveUserMessage(msg) {
     ts: new Date(),
   };
   const res = await db.collection("messages").insertOne(doc);
+  
+  // Update LRU cache with new message
+  messageCache.addMessage(doc);
+  
   const count = await db.collection("messages").countDocuments({
     type: "message",
     channel: msg.channel.id,
@@ -579,8 +673,7 @@ async function handleAdminCommands(msg) {
       await resetDatabase();
       
       // Clear all in-memory caches
-      historyCache.user.clear();
-      historyCache.channel.clear();
+      messageCache.clear();
       contentAnalysisCache.clear();
       contradictionValidationCache.clear();
       latestSourcesByBotMsg.clear();
