@@ -5,8 +5,10 @@ const { connect, resetDatabase } = require("./mongo");
 const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
 const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logic");
 const axios = require("axios");
-const pLimit = require("p-limit");
 const app = express();
+
+// p-limit will be loaded dynamically
+let pLimit;
 const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
 app.listen(PORT, () => console.log(`Keepalive server running on port ${PORT}`));
@@ -211,13 +213,21 @@ const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
 const USE_LOGICAL_PRINCIPLES = true; // TODO: Make this configurable for testing
 
 // ---- RATE LIMITING SETUP ----
-// Different limits for different priority AI operations
-const userFacingLimit = pLimit(3); // Max 3 concurrent user-facing replies (highest priority)
-const backgroundLimit = pLimit(2);  // Max 2 concurrent background detections (medium priority) 
-const summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
-const factCheckLimit = pLimit(2);   // Max 2 concurrent fact-checks (medium priority)
+// Rate limiters will be initialized after p-limit loads
+let userFacingLimit, backgroundLimit, summaryLimit, factCheckLimit;
 
-console.log("[RATE LIMIT] AI call limits configured - UserFacing: 3, Background: 2, Summary: 1, FactCheck: 2");
+async function initializeRateLimiting() {
+  // Load p-limit dynamically (ES module)
+  pLimit = (await import("p-limit")).default;
+  
+  // Initialize rate limiters
+  userFacingLimit = pLimit(3); // Max 3 concurrent user-facing replies (highest priority)
+  backgroundLimit = pLimit(2);  // Max 2 concurrent background detections (medium priority) 
+  summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
+  factCheckLimit = pLimit(2);   // Max 2 concurrent fact-checks (medium priority)
+  
+  console.log("[RATE LIMIT] AI call limits configured - UserFacing: 3, Background: 2, Summary: 1, FactCheck: 2");
+}
 
 // ---- CIRCUIT BREAKER IMPLEMENTATION ----
 class CircuitBreaker {
@@ -719,14 +729,22 @@ Summary:
 `.trim();
       let summary = "";
       try {
-        console.log(`[RATE LIMIT] Summarization AI queued (${summaryLimit.pendingCount} pending, ${summaryLimit.activeCount} active)`);
-        const { result } = await summaryLimit(() => {
-          return aiCircuitBreaker.execute(async () => {
-            console.log("[RATE LIMIT] Summarization AI executing");
+        if (!summaryLimit) {
+          console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
+          const { result } = await aiCircuitBreaker.execute(async () => {
             return aiSummarization(summaryPrompt);
           });
-        });
-        summary = result;
+          summary = result;
+        } else {
+          console.log(`[RATE LIMIT] Summarization AI queued (${summaryLimit.pendingCount} pending, ${summaryLimit.activeCount} active)`);
+          const { result } = await summaryLimit(() => {
+            return aiCircuitBreaker.execute(async () => {
+              console.log("[RATE LIMIT] Summarization AI executing");
+              return aiSummarization(summaryPrompt);
+            });
+          });
+          summary = result;
+        }
       } catch (e) {
         summary = "[failed to summarize]";
         console.warn("Summary error:", e);
@@ -910,6 +928,13 @@ async function exaSearch(query, numResults = 10) {
 
 // ---- AI UTILS WITH RATE LIMITING & CIRCUIT BREAKERS ----
 async function aiFlash(prompt) {
+  if (!backgroundLimit) {
+    console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
+    return await aiCircuitBreaker.execute(async () => {
+      return aiBackground(prompt);
+    });
+  }
+  
   console.log(`[RATE LIMIT] Background AI queued (${backgroundLimit.pendingCount} pending, ${backgroundLimit.activeCount} active)`);
   return await backgroundLimit(() => {
     return aiCircuitBreaker.execute(async () => {
@@ -920,6 +945,13 @@ async function aiFlash(prompt) {
 }
 
 async function aiFactCheckFlash(prompt) {
+  if (!factCheckLimit) {
+    console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
+    return await aiCircuitBreaker.execute(async () => {
+      return aiFactCheck(prompt);
+    });
+  }
+  
   console.log(`[RATE LIMIT] FactCheck AI queued (${factCheckLimit.pendingCount} pending, ${factCheckLimit.activeCount} active)`);
   return await factCheckLimit(() => {
     return aiCircuitBreaker.execute(async () => {
@@ -1179,13 +1211,21 @@ ${answer.answer}
 }
 
 // ------ DISCORD BOT EVENT HANDLER ------
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}!`);
   console.log(`[DEBUG] Bot ready. Required env vars check:`);
   console.log(`- DISCORD_TOKEN: ${process.env.DISCORD_TOKEN ? 'SET' : 'MISSING'}`);
   console.log(`- DO_AI_API_KEY: ${process.env.DO_AI_API_KEY ? 'SET' : 'MISSING'}`);
   console.log(`- MONGODB_URI: ${process.env.MONGODB_URI ? 'SET' : 'MISSING'}`);
   console.log(`- EXA_API_KEY: ${process.env.EXA_API_KEY ? 'SET' : 'MISSING'}`);
+  
+  // Initialize rate limiting
+  try {
+    await initializeRateLimiting();
+  } catch (error) {
+    console.error("[ERROR] Failed to initialize rate limiting:", error);
+    process.exit(1);
+  }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -1481,14 +1521,22 @@ ${referencedSection}
 
     let replyText;
     try {
-      console.log(`[RATE LIMIT] UserFacing AI queued (${userFacingLimit.pendingCount} pending, ${userFacingLimit.activeCount} active)`);
-      const { result } = await userFacingLimit(() => {
-        return aiCircuitBreaker.execute(async () => {
-          console.log("[RATE LIMIT] UserFacing AI executing");
+      if (!userFacingLimit) {
+        console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
+        const { result } = await aiCircuitBreaker.execute(async () => {
           return aiUserFacing(prompt);
         });
-      });
-      replyText = result;
+        replyText = result;
+      } else {
+        console.log(`[RATE LIMIT] UserFacing AI queued (${userFacingLimit.pendingCount} pending, ${userFacingLimit.activeCount} active)`);
+        const { result } = await userFacingLimit(() => {
+          return aiCircuitBreaker.execute(async () => {
+            console.log("[RATE LIMIT] UserFacing AI executing");
+            return aiUserFacing(prompt);
+          });
+        });
+        replyText = result;
+      }
     } catch (e) {
       replyText = "The Arbiter chooses silence.";
       console.warn("AI user-facing error:", e);
