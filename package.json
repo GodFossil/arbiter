@@ -11,6 +11,7 @@
     "discord.js": "^14.11.0",
     "dotenv": "^16.0.0",
     "express": "^5.1.0",
-    "mongodb": "^5.7.0"
+    "mongodb": "^5.7.0",
+    "p-limit": "^7.1.0"
   }
 }

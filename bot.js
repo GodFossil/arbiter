@@ -5,6 +5,7 @@ const { connect, resetDatabase } = require("./mongo");
 const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
 const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logic");
 const axios = require("axios");
+const pLimit = require("p-limit");
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
@@ -208,6 +209,15 @@ const SUMMARY_BLOCK_SIZE = 20;
 const MAX_FACTCHECK_CHARS = 500;
 const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
 const USE_LOGICAL_PRINCIPLES = true; // TODO: Make this configurable for testing
+
+// ---- RATE LIMITING SETUP ----
+// Different limits for different priority AI operations
+const userFacingLimit = pLimit(3); // Max 3 concurrent user-facing replies (highest priority)
+const backgroundLimit = pLimit(2);  // Max 2 concurrent background detections (medium priority) 
+const summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
+const factCheckLimit = pLimit(2);   // Max 2 concurrent fact-checks (medium priority)
+
+console.log("[RATE LIMIT] AI call limits configured - UserFacing: 3, Background: 2, Summary: 1, FactCheck: 2");
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -623,7 +633,11 @@ Summary:
 `.trim();
       let summary = "";
       try {
-        const { result } = await aiSummarization(summaryPrompt);
+        console.log(`[RATE LIMIT] Summarization AI queued (${summaryLimit.pendingCount} pending, ${summaryLimit.activeCount} active)`);
+        const { result } = await summaryLimit(() => {
+          console.log("[RATE LIMIT] Summarization AI executing");
+          return aiSummarization(summaryPrompt);
+        });
         summary = result;
       } catch (e) {
         summary = "[failed to summarize]";
@@ -777,12 +791,21 @@ async function exaSearch(query, numResults = 10) {
   }
 }
 
-// ---- AI UTILS ----
+// ---- AI UTILS WITH RATE LIMITING ----
 async function aiFlash(prompt) {
-  return await aiBackground(prompt);
+  console.log(`[RATE LIMIT] Background AI queued (${backgroundLimit.pendingCount} pending, ${backgroundLimit.activeCount} active)`);
+  return await backgroundLimit(() => {
+    console.log("[RATE LIMIT] Background AI executing");
+    return aiBackground(prompt);
+  });
 }
+
 async function aiFactCheckFlash(prompt) {
-  return await aiFactCheck(prompt);
+  console.log(`[RATE LIMIT] FactCheck AI queued (${factCheckLimit.pendingCount} pending, ${factCheckLimit.activeCount} active)`);
+  return await factCheckLimit(() => {
+    console.log("[RATE LIMIT] FactCheck AI executing");
+    return aiFactCheck(prompt);
+  });
 }
 
 // ---- DETECTION LOGIC ----
@@ -1337,7 +1360,11 @@ ${referencedSection}
 
     let replyText;
     try {
-      const { result } = await aiUserFacing(prompt);
+      console.log(`[RATE LIMIT] UserFacing AI queued (${userFacingLimit.pendingCount} pending, ${userFacingLimit.activeCount} active)`);
+      const { result } = await userFacingLimit(() => {
+        console.log("[RATE LIMIT] UserFacing AI executing");
+        return aiUserFacing(prompt);
+      });
       replyText = result;
     } catch (e) {
       replyText = "The Arbiter chooses silence.";
