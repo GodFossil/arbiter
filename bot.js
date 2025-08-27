@@ -1,14 +1,44 @@
 require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
-const { connect, resetDatabase } = require("./mongo");
+const { resetDatabase } = require("./mongo");
 const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
 const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logic");
+const { KNOWN_BOT_COMMANDS, TRIVIAL_PATTERNS, isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
+const {
+  messageCache,
+  contentAnalysisCache,
+  contradictionValidationCache,
+  saveUserMessage,
+  saveBotReply,
+  fetchUserHistory,
+  fetchChannelHistory,
+  fetchUserMessagesForDetection,
+  clearAllCaches,
+  getCacheStatus,
+  performCacheCleanup,
+  resetAllData,
+  getDisplayName,
+  getChannelName,
+  getGuildName,
+  getDisplayNameById,
+  isTrivialOrSafeMessage: isTrivialOrSafeMessageFromStorage
+} = require("./storage");
+const { 
+  CircuitBreaker, 
+  initializeAIUtils, 
+  aiFlash, 
+  aiFactCheckFlash, 
+  exaAnswer, 
+  exaSearch, 
+  cleanUrl,
+  getCircuitBreakers,
+  EXA_API_KEY 
+} = require("./ai-utils");
+const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS } = require("./detection");
 const axios = require("axios");
 const app = express();
 
-// p-limit will be loaded dynamically
-let pLimit;
 const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
 app.listen(PORT, () => console.log(`Keepalive server running on port ${PORT}`));
@@ -43,277 +73,15 @@ function isBotActiveInChannel(msg) {
   return false;
 }
 
-// ====== BOT COMMANDS TO IGNORE FROM OTHER BOTS ======
-const KNOWN_BOT_COMMANDS = [
-  "!purge", "!silence", "!user", "!cleanrapsheet", "!rapsheet",
-  "!charge", "!cite", "!book", "!editdailytopic", "<@&13405551155400003624>",
-  "!boot", "!!!", "!editRapSheet", "!ban", "!editDemographics", "!selection",
-  "$selection", "<@&1333261940235047005>", "<@&1333490526296477716>", "<@&1328638724778627094>",
-  "<@&1333264620869128254>", "<@&1333223047385059470>", "<@&1333222016710611036>", "<@&1334073571638644760>",
-  "<@&1335152063067324478>", "<@&1336979693844434987>", "<@&1340140409732468866>", "<@&1317770083375775764>",
-  "<@&1317766628569518112>", "<@&1392325053432987689>", "!define", "&poll", "$demographics", "Surah",
-  "!surah", "<@&1334820484440657941>", "!mimic", "$!", "!$", "$$", "<@&1399605580502405120>", "!arraign",
-  "!trialReset", "!release", "!mark", "!flag", "/endthread", ".newPollButton", "!webhook", "!goTrigger", "!&",
-  "!eval", "!chart", "&test", "++" // Add others here as needed
-];
-// Cached trivial patterns for performance
-const TRIVIAL_PATTERNS = {
-  safe: new Set([
-    "hello", "hi", "hey", "ok", "okay", "yes", "no", "lol", "sure", "cool", "nice", "thanks",
-    "thank you", "hey arbiter", "sup", "idk", "good morning", "good night", "haha", "lmao",
-    "brb", "ttyl", "gtg", "omg", "wtf", "tbh", "imo", "ngl", "fr", "bet", "facts", "cap",
-    "no cap", "word", "mood", "same", "this", "that", "what", "who", "when", "where", "why",
-    "rip", "f", "oof", "yikes", "cringe", "based", "ratio", "w", "l", "cope", "seethe",
-    "touch grass", "skill issue", "imagine", "sus", "among us", "poggers", "sheesh", "bussin"
-  ]),
-  
-  // Compiled regex patterns for better performance
-  onlyEmoji: /^[\p{Emoji}\s\p{P}]+$/u,
-  onlyPunctuation: /^[.!?,:;'"()\[\]{}\-_+=<>|\\\/~`^*&%$#@]+$/,
-  repeatedChars: /^(.)\1{2,}$/,
-  shortAcronym: /^[a-z]{1,3}$/,
-  onlyNumbers: /^\d+$/,
-  reactionText: /^(same|this|true|real|facts|\+1|-1|agree|disagree)$/,
-  
-  // Discourse markers that add no substantive content
-  fillerPhrases: /^(anyway|so|well|like|actually|basically|literally|honestly|obviously|clearly|wait|hold up|bruh|bro|dude|man|yo)$/,
-  
-  // Questions that don't assert anything substantive
-  simpleQuestions: /^(what|who|when|where|why|how|really|seriously)\??$/,
-  
-  // Acknowledgments and reactions
-  acknowledgments: /^(got it|i see|makes sense|fair enough|right|exactly|precisely|indeed|correct|wrong|nope|yep|yup|nah)$/
-};
 
-function isTrivialOrSafeMessage(content) {
-  if (!content || typeof content !== "string") return true;
-  
-  const trimmed = content.trim();
-  const lower = trimmed.toLowerCase();
-  
-  // Quick length checks first (fastest)
-  if (trimmed.length < 4) return true;
-  if (trimmed.length > 200) return false; // Long messages are likely substantive
-  
-  // Check cached safe words (O(1) lookup)
-  if (TRIVIAL_PATTERNS.safe.has(lower)) return true;
-  
-  // Check compiled regex patterns (faster than multiple pattern checks)
-  if (TRIVIAL_PATTERNS.onlyEmoji.test(content)) return true;
-  if (TRIVIAL_PATTERNS.onlyPunctuation.test(content)) return true;
-  if (TRIVIAL_PATTERNS.repeatedChars.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.onlyNumbers.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.shortAcronym.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.reactionText.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.fillerPhrases.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.simpleQuestions.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.acknowledgments.test(lower)) return true;
-  
-  // Advanced trivial detection
-  const words = lower.split(/\s+/);
-  
-  // Single word reactions
-  if (words.length === 1) {
-    return true; // Most single words are reactions
-  }
-  
-  // Repeated words/phrases
-  if (words.length <= 3 && new Set(words).size === 1) {
-    return true; // "no no no", "yes yes", etc.
-  }
-  
-  // All words are from safe set
-  if (words.length <= 5 && words.every(word => TRIVIAL_PATTERNS.safe.has(word))) {
-    return true; // Combinations of safe words
-  }
-  
-  return false;
-}
-function isOtherBotCommand(content) {
-  if (!content) return false;
-  return KNOWN_BOT_COMMANDS.some(cmd =>
-    content.trim().toLowerCase().startsWith(cmd)
-  );
-}
-
-// ---- LRU CACHE IMPLEMENTATION ----
-class LRUCache {
-  constructor(maxSize) {
-    this.maxSize = maxSize;
-    this.cache = new Map();
-  }
-  
-  get(key) {
-    if (this.cache.has(key)) {
-      // Move to end (most recently used)
-      const value = this.cache.get(key);
-      this.cache.delete(key);
-      this.cache.set(key, value);
-      return value;
-    }
-    return null;
-  }
-  
-  set(key, value) {
-    if (this.cache.has(key)) {
-      // Update existing key
-      this.cache.delete(key);
-    } else if (this.cache.size >= this.maxSize) {
-      // Remove least recently used (first item)
-      const firstKey = this.cache.keys().next().value;
-      this.cache.delete(firstKey);
-    }
-    this.cache.set(key, value);
-  }
-  
-  delete(key) {
-    return this.cache.delete(key);
-  }
-  
-  clear() {
-    this.cache.clear();
-  }
-  
-  get size() {
-    return this.cache.size;
-  }
-  
-  // Add a message to the appropriate cache entries
-  addMessage(msg) {
-    const userKey = `user:${msg.user}:${msg.channel}:${msg.guildId}`;
-    const channelKey = `channel:${msg.channel}:${msg.guildId}`;
-    
-    // Get existing arrays or create new ones
-    let userMessages = this.get(userKey) || [];
-    let channelMessages = this.get(channelKey) || [];
-    
-    // Add new message to front (most recent)
-    userMessages.unshift(msg);
-    channelMessages.unshift(msg);
-    
-    // Keep only the most recent N messages
-    userMessages = userMessages.slice(0, 20); // Keep 20 user messages
-    channelMessages = channelMessages.slice(0, 50); // Keep 50 channel messages
-    
-    // Update cache
-    this.set(userKey, userMessages);
-    this.set(channelKey, channelMessages);
-  }
-}
 
 // ---- TUNEABLE PARAMETERS ----
-const messageCache = new LRUCache(1000); // Cache up to 1000 different query results
-const contentAnalysisCache = new Map(); // Cache content analysis results
-const contradictionValidationCache = new Map(); // Cache validation results
-const ANALYSIS_CACHE_TTL_MS = 60000; // 1 minute TTL for analysis cache
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
-const MAX_FACTCHECK_CHARS = 500;
 const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
 const USE_LOGICAL_PRINCIPLES = true; // TODO: Make this configurable for testing
 
-// ---- RATE LIMITING SETUP ----
-// Rate limiters will be initialized after p-limit loads
-let userFacingLimit, backgroundLimit, summaryLimit, factCheckLimit;
-
-async function initializeRateLimiting() {
-  // Load p-limit dynamically (ES module)
-  pLimit = (await import("p-limit")).default;
-  
-  // Initialize rate limiters
-  userFacingLimit = pLimit(3); // Max 3 concurrent user-facing replies (highest priority)
-  backgroundLimit = pLimit(2);  // Max 2 concurrent background detections (medium priority) 
-  summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
-  factCheckLimit = pLimit(2);   // Max 2 concurrent fact-checks (medium priority)
-  
-  console.log("[RATE LIMIT] AI call limits configured - UserFacing: 3, Background: 2, Summary: 1, FactCheck: 2");
-}
-
-// ---- CIRCUIT BREAKER IMPLEMENTATION ----
-class CircuitBreaker {
-  constructor(name, options = {}) {
-    this.name = name;
-    this.failureThreshold = options.failureThreshold || 5;
-    this.timeout = options.timeout || 60000; // 1 minute
-    this.resetTimeout = options.resetTimeout || 30000; // 30 seconds
-    
-    this.state = 'CLOSED'; // CLOSED, OPEN, HALF_OPEN
-    this.failureCount = 0;
-    this.lastFailureTime = null;
-    this.successCount = 0;
-  }
-  
-  async execute(operation) {
-    if (this.state === 'OPEN') {
-      if (Date.now() - this.lastFailureTime < this.timeout) {
-        console.log(`[CIRCUIT BREAKER] ${this.name} is OPEN - failing fast`);
-        throw new Error(`Circuit breaker ${this.name} is OPEN`);
-      }
-      // Transition to HALF_OPEN for testing
-      this.state = 'HALF_OPEN';
-      console.log(`[CIRCUIT BREAKER] ${this.name} transitioning to HALF_OPEN`);
-    }
-    
-    try {
-      const result = await operation();
-      this.onSuccess();
-      return result;
-    } catch (error) {
-      this.onFailure();
-      throw error;
-    }
-  }
-  
-  onSuccess() {
-    this.failureCount = 0;
-    if (this.state === 'HALF_OPEN') {
-      this.successCount++;
-      if (this.successCount >= 2) { // Require 2 successes to close
-        this.state = 'CLOSED';
-        this.successCount = 0;
-        console.log(`[CIRCUIT BREAKER] ${this.name} recovered - state: CLOSED`);
-      }
-    }
-  }
-  
-  onFailure() {
-    this.failureCount++;
-    this.lastFailureTime = Date.now();
-    
-    if (this.state === 'HALF_OPEN') {
-      this.state = 'OPEN';
-      this.successCount = 0;
-      console.log(`[CIRCUIT BREAKER] ${this.name} failed during test - state: OPEN`);
-    } else if (this.failureCount >= this.failureThreshold) {
-      this.state = 'OPEN';
-      console.log(`[CIRCUIT BREAKER] ${this.name} threshold exceeded (${this.failureCount}/${this.failureThreshold}) - state: OPEN`);
-    }
-  }
-  
-  getStatus() {
-    return {
-      name: this.name,
-      state: this.state,
-      failureCount: this.failureCount,
-      lastFailureTime: this.lastFailureTime
-    };
-  }
-}
-
-// Create circuit breakers for external APIs
-const aiCircuitBreaker = new CircuitBreaker('DigitalOcean-AI', {
-  failureThreshold: 3,
-  timeout: 120000, // 2 minutes
-  resetTimeout: 60000 // 1 minute
-});
-
-const exaCircuitBreaker = new CircuitBreaker('Exa-API', {
-  failureThreshold: 5,
-  timeout: 60000, // 1 minute  
-  resetTimeout: 30000 // 30 seconds
-});
-
-console.log("[CIRCUIT BREAKER] Circuit breakers initialized - AI, Exa");
+// Circuit breakers are now imported from ai-utils.js
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -326,27 +94,6 @@ You are the invaluable assistant of our Discord debate server. The server is cal
 `.trim();
 
 // ---- UTILITIES ----
-function getDisplayName(msg) {
-  if (!msg.guild) return msg.author.username;
-  const member = msg.guild.members.cache.get(msg.author.id) || msg.member;
-  if (member && member.displayName) return member.displayName;
-  return msg.author.username;
-}
-function getChannelName(msg) {
-  try { return msg.channel.name || `id:${msg.channel.id}`; } catch { return `id:${msg.channel.id}`; }
-}
-function getGuildName(msg) {
-  try { return msg.guild?.name || `id:${msg.guildId || "?"}`; } catch { return `id:${msg.guildId || "?"}`; }
-}
-async function getDisplayNameById(userId, guild) {
-  if (!guild) return userId;
-  try {
-    const member = await guild.members.fetch(userId);
-    return member.displayName || member.user.username || userId;
-  } catch {
-    return userId;
-  }
-}
 async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap) {
   // Generate a unique ID for this button interaction
   const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -362,9 +109,7 @@ async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap) {
   
   return replyMsg;
 }
-function cleanUrl(url) {
-  return url.trim().replace(/[)\].,;:!?]+$/g, '');
-}
+// cleanUrl is now imported from ai-utils.js
 
 function truncateMessage(content, maxLength = 1950) {
   if (!content || content.length <= maxLength) return content;
@@ -377,206 +122,9 @@ function truncateMessage(content, maxLength = 1950) {
   return content.slice(0, cutPoint) + '... [truncated]';
 }
 
-function validateContradiction(statement1, statement2) {
-  const s1 = statement1.toLowerCase().trim();
-  const s2 = statement2.toLowerCase().trim();
-  
-  console.log(`[DEBUG] Validating contradiction:`);
-  console.log(`[DEBUG]   Statement 1: "${statement1}"`);
-  console.log(`[DEBUG]   Statement 2: "${statement2}"`);
-  
-  // Exact match = not a contradiction (same statement)
-  if (s1 === s2) {
-    console.log(`[DEBUG] Identical statements - not a contradiction`);
-    return false;
-  }
-  
-  // Topic relevance check - statements must be about the same subject
-  const topics = {
-    vaccines: ['vaccine', 'vaccination', 'immunization', 'shot', 'jab'],
-    elections: ['election', 'vote', 'trump', 'biden', 'president', 'electoral'],
-    earth: ['earth', 'planet', 'world', 'globe', 'flat', 'round', 'sphere'],
-    climate: ['climate', 'global warming', 'temperature', 'carbon', 'emissions'],
-    health: ['health', 'medicine', 'drug', 'treatment', 'cure', 'disease'],
-    ghosts: ['ghost', 'spirit', 'supernatural', 'paranormal', 'haunted'],
-    aliens: ['alien', 'ufo', 'extraterrestrial', 'space', 'abduction'],
-    science: ['science', 'scientific', 'research', 'study', 'experiment'],
-    religion: ['god', 'jesus', 'christian', 'islam', 'religion', 'faith', 'bible']
-  };
-  
-  let s1Topic = null, s2Topic = null;
-  
-  for (const [topicName, keywords] of Object.entries(topics)) {
-    if (keywords.some(keyword => s1.includes(keyword))) s1Topic = topicName;
-    if (keywords.some(keyword => s2.includes(keyword))) s2Topic = topicName;
-  }
-  
-  if (s1Topic && s2Topic && s1Topic !== s2Topic) {
-    console.log(`[DEBUG] Topic mismatch: "${s1Topic}" vs "${s2Topic}" - not a valid contradiction`);
-    return false;
-  }
-  
-  // Check for negation patterns that indicate TRUE contradictions
-  const negationPatterns = [
-    // Direct negation pairs
-    { positive: /\b(is|are|was|were)\b/, negative: /\b(is not|are not|was not|were not|isn't|aren't|wasn't|weren't)\b/ },
-    { positive: /\bexist(s)?\b/, negative: /\b(don't|doesn't|do not|does not) exist\b/ },
-    { positive: /\btrue\b/, negative: /\b(false|not true|untrue)\b/ },
-    { positive: /\breal\b/, negative: /\b(fake|not real|unreal)\b/ },
-    { positive: /\bhappened\b/, negative: /\b(never happened|didn't happen)\b/ },
-    { positive: /\bcause(s)?\b/, negative: /\b(don't cause|doesn't cause|do not cause)\b/ },
-    { positive: /\bsafe\b/, negative: /\b(dangerous|unsafe|harmful)\b/ },
-    { positive: /\beffective\b/, negative: /\b(ineffective|useless)\b/ }
-  ];
-  
-  // Check for true negation contradictions
-  for (const pattern of negationPatterns) {
-    const s1HasPositive = pattern.positive.test(s1);
-    const s1HasNegative = pattern.negative.test(s1);
-    const s2HasPositive = pattern.positive.test(s2);
-    const s2HasNegative = pattern.negative.test(s2);
-    
-    // True contradiction: one has positive, other has negative
-    if ((s1HasPositive && s2HasNegative) || (s1HasNegative && s2HasPositive)) {
-      console.log(`[DEBUG] TRUE negation contradiction found with pattern: ${pattern.positive.source}`);
-      return true;
-    }
-  }
-  
-  // Check for semantic agreement (both describing same general concept)
-  const agreementClusters = [
-    // Shape concepts that agree
-    ['flat', 'disc', 'pancake', 'plane'],
-    ['round', 'spherical', 'ball', 'globe'],
-    // Size concepts  
-    ['big', 'large', 'huge', 'massive'],
-    ['small', 'tiny', 'little', 'miniature'],
-    // Quality concepts
-    ['good', 'great', 'excellent', 'amazing'],
-    ['bad', 'terrible', 'awful', 'horrible'],
-    // Certainty concepts
-    ['definitely', 'certainly', 'absolutely', 'clearly'],
-    ['maybe', 'possibly', 'perhaps', 'might'],
-    // Temporal concepts  
-    ['always', 'constantly', 'forever', 'permanently'],
-    ['never', 'not ever', 'at no time'],
-    // Evidence concepts
-    ['proven', 'confirmed', 'verified', 'established'],
-    ['disproven', 'debunked', 'falsified', 'refuted']
-  ];
-  
-  // Check if both statements use words from same semantic cluster
-  for (const cluster of agreementClusters) {
-    const s1Words = cluster.filter(word => s1.includes(word));
-    const s2Words = cluster.filter(word => s2.includes(word));
-    
-    if (s1Words.length > 0 && s2Words.length > 0) {
-      console.log(`[DEBUG] Semantic agreement in cluster [${cluster.join(', ')}]: "${s1Words}" vs "${s2Words}"`);
-      return false; // Both use similar semantic concepts
-    }
-  }
-  
-  // Check for uncertainty language that prevents contradictions
-  const uncertaintyMarkers = ['maybe', 'perhaps', 'possibly', 'might', 'could', 'i think', 'i believe', 'seems like', 'appears'];
-  const s1Uncertain = uncertaintyMarkers.some(marker => s1.includes(marker));
-  const s2Uncertain = uncertaintyMarkers.some(marker => s2.includes(marker));
-  
-  if (s1Uncertain || s2Uncertain) {
-    console.log(`[DEBUG] Uncertainty language detected - not a definitive contradiction`);
-    return false;
-  }
-  
-  // Check for temporal qualifiers that prevent contradictions
-  const temporalMarkers = ['used to', 'previously', 'before', 'now', 'currently', 'today', 'at first', 'initially', 'later', 'then'];
-  const s1Temporal = temporalMarkers.some(marker => s1.includes(marker));
-  const s2Temporal = temporalMarkers.some(marker => s2.includes(marker));
-  
-  if (s1Temporal || s2Temporal) {
-    console.log(`[DEBUG] Temporal qualifiers detected - statements may refer to different time periods`);
-    return false;
-  }
-  
-  // If we get here, it might be a valid contradiction
-  console.log(`[DEBUG] No semantic agreement or disqualifying factors found - allowing contradiction`);
-  return true;
-}
 
-// ---- HISTORY UTILS WITH LRU CACHE ----
-async function fetchUserHistory(userId, channelId, guildId, limit = 7, excludeMsgId = null) {
-  const cacheKey = `user:${userId}:${channelId}:${guildId}`;
-  
-  // Try cache first
-  let cachedMessages = messageCache.get(cacheKey) || [];
-  
-  // Filter out excluded message if specified
-  if (excludeMsgId) {
-    cachedMessages = cachedMessages.filter(m => m._id?.toString() !== excludeMsgId);
-  }
-  
-  // If we have enough cached messages, return them
-  if (cachedMessages.length >= limit) {
-    console.log(`[CACHE HIT] User history for ${userId} (${cachedMessages.length} cached messages)`);
-    return cachedMessages.slice(0, limit);
-  }
-  
-  // Cache miss or insufficient data - fetch from MongoDB
-  console.log(`[CACHE MISS] User history for ${userId} - fetching from MongoDB`);
-  const db = await connect();
-  const query = { type: "message", user: userId, channel: channelId, guildId };
-  if (excludeMsgId) query._id = { $ne: excludeMsgId };
-  
-  const data = await db.collection("messages")
-    .find(query)
-    .sort({ ts: -1 })
-    .limit(Math.max(limit, 20)) // Fetch extra for better caching
-    .toArray();
-  
-  // Update cache with fresh data
-  messageCache.set(cacheKey, data);
-  
-  return data.slice(0, limit);
-}
-async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId = null) {
-  const cacheKey = `channel:${channelId}:${guildId}`;
-  
-  // Try cache first
-  let cachedMessages = messageCache.get(cacheKey) || [];
-  
-  // Filter out excluded message if specified
-  if (excludeMsgId) {
-    cachedMessages = cachedMessages.filter(m => m._id?.toString() !== excludeMsgId);
-  }
-  
-  // If we have enough cached messages, return them
-  if (cachedMessages.length >= limit) {
-    console.log(`[CACHE HIT] Channel history for ${channelId} (${cachedMessages.length} cached messages)`);
-    return cachedMessages.slice(0, limit);
-  }
-  
-  // Cache miss or insufficient data - fetch from MongoDB
-  console.log(`[CACHE MISS] Channel history for ${channelId} - fetching from MongoDB`);
-  const db = await connect();
-  
-  const [full, summaries] = await Promise.all([
-    db.collection("messages")
-      .find({ type: "message", channel: channelId, guildId, content: { $exists: true }, ...(excludeMsgId && { _id: { $ne: excludeMsgId } }) })
-      .sort({ ts: -1 })
-      .limit(Math.max(limit, 50)) // Fetch extra for better caching
-      .toArray(),
-    db.collection("messages")
-      .find({ type: "summary", channel: channelId, guildId })
-      .sort({ ts: -1 })
-      .limit(3)
-      .toArray()
-  ]);
-  
-  const result = [...summaries.reverse(), ...full.reverse()];
-  
-  // Update cache with fresh data (messages only, not summaries for simplicity)
-  messageCache.set(cacheKey, full);
-  
-  return result.slice(0, limit + summaries.length);
-}
+
+
 
 // Button logic  
 const SOURCE_BUTTON_ID = "arbiter-show-sources";
@@ -648,126 +196,13 @@ setInterval(async () => {
   
   // LRU cache is self-managing, no TTL cleanup needed
   
-  // Clean up analysis caches with TTL
-  for (const [key, cached] of contentAnalysisCache.entries()) {
-    if (cached && (Date.now() - cached.timestamp > ANALYSIS_CACHE_TTL_MS)) {
-      contentAnalysisCache.delete(key);
-    }
-  }
+  // Perform storage cache cleanup
+  performCacheCleanup();
   
-  // Clean up validation cache when it grows too large
-  if (contradictionValidationCache.size > 1000) {
-    console.log(`[DEBUG] Clearing validation cache (${contradictionValidationCache.size} entries)`);
-    contradictionValidationCache.clear();
-  }
-  
-  console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, messages=${messageCache.size}, analysis=${contentAnalysisCache.size}, validation=${contradictionValidationCache.size}`);
+  console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, storage caches cleaned via storage module`);
 }, 5 * 60 * 1000); // Run every 5 minutes instead of 10
 
-// ---- MEMORY SAVE WITH META ----
-async function saveUserMessage(msg) {
-  const db = await connect();
-  const doc = {
-    type: "message",
-    user: msg.author.id,
-    username: msg.author.username,
-    displayName: getDisplayName(msg),
-    channel: msg.channel.id,
-    channelName: getChannelName(msg),
-    guildId: msg.guildId || (msg.guild && msg.guild.id) || null,
-    guildName: getGuildName(msg),
-    isBot: msg.author.bot,
-    content: msg.content,
-    discordMessageId: msg.id,
-    ts: new Date(),
-  };
-  const res = await db.collection("messages").insertOne(doc);
-  
-  // Update LRU cache with new message
-  messageCache.addMessage(doc);
-  
-  const count = await db.collection("messages").countDocuments({
-    type: "message",
-    channel: msg.channel.id,
-    guildId: doc.guildId
-  });
-  if (count > MAX_CONTEXT_MESSAGES_PER_CHANNEL) {
-    const toSummarize = await db.collection("messages")
-      .find({ type: "message", channel: msg.channel.id, guildId: doc.guildId })
-      .sort({ ts: 1 })
-      .limit(SUMMARY_BLOCK_SIZE)
-      .toArray();
 
-    // Trivial message filtering for summarization batch
-    const hasSubstantive = toSummarize.some(m => !isTrivialOrSafeMessage(m.content));
-    const trivialPercent = toSummarize.filter(m => isTrivialOrSafeMessage(m.content)).length / toSummarize.length;
-    // Use a count-based threshold, e.g. only summarize if at least 30% are substantive
-    if (toSummarize.length > 0 && hasSubstantive && trivialPercent <= TRIVIAL_HISTORY_THRESHOLD) {
-      let userDisplayNames = {};
-      if (msg.guild) {
-        const uniqueUserIds = [...new Set(toSummarize.map(m => m.user))];
-        await Promise.all(uniqueUserIds.map(
-          async uid => userDisplayNames[uid] = await getDisplayNameById(uid, msg.guild)
-        ));
-      }
-      const summaryPrompt = `
-${SYSTEM_INSTRUCTIONS}
-Summarize the following Discord channel messages as a brief log for posterity. Use users' display names when possible.
-- If messages include false claims, contradictions, or retractions, state explicitly who was mistaken, who corrected them (and how), and what exactly was the error.
-- If a user admits an error, highlight this. We commend integrity.
-- If a debate remains unresolved or inconclusive by the end of this block, note it is unresolved, but do not imply equivalence as if both sides are equally supported when they are not.
-- Do not soften, balance, or average disagreements where the superior argument is clear. Be direct: flag unsubstantiated claims, debunked assertions, consequential logical fallacies, dishonesty, unwarranted hostility, failures to concede, dodgy tactics, and corrections. Commend outstanding arguments and displays of intellectual honesty.
-- If you detect jokes, sarcasm, or unserious messages, do not treat them as genuine arguments or factual claims. Mention them only to clarify tone, provide context, or explain a lack of stance. Use your best judgement.
-- Avoid unnecessary ambiguity in summary sentences. Assert clearly when a user's claim is unsupported or proven incorrect, and do not use hedging ("may", "might", "possibly") unless there is genuine ambiguity.
-- Whatever the case, do NOT sugar coat your observations. Call things for what they are. Let _truth over everything_ be your primordial tenet.
-- You must begin your output with 'Summary:' and use this bullet-point style for every summary:  
-  • [display name]: [summary sentence]
-- Be specific. If in doubt, prioritize clarity over brevity.
-Messages:
-${toSummarize.map(m => `[${new Date(m.ts).toLocaleString()}] ${userDisplayNames[m.user] || m.username}: ${m.content}`).join("\n")}
-Summary:
-`.trim();
-      let summary = "";
-      try {
-        if (!summaryLimit) {
-          console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
-          const { result } = await aiCircuitBreaker.execute(async () => {
-            return aiSummarization(summaryPrompt);
-          });
-          summary = result;
-        } else {
-          console.log(`[RATE LIMIT] Summarization AI queued (${summaryLimit.pendingCount} pending, ${summaryLimit.activeCount} active)`);
-          const { result } = await summaryLimit(() => {
-            return aiCircuitBreaker.execute(async () => {
-              console.log("[RATE LIMIT] Summarization AI executing");
-              return aiSummarization(summaryPrompt);
-            });
-          });
-          summary = result;
-        }
-      } catch (e) {
-        summary = "[failed to summarize]";
-        console.warn("Summary error:", e);
-      }
-      await db.collection("messages").insertOne({
-        type: "summary",
-        channel: msg.channel.id,
-        channelName: getChannelName(msg),
-        guildId: doc.guildId,
-        guildName: doc.guildName,
-        startTs: toSummarize[0].ts,
-        endTs: toSummarize[toSummarize.length - 1].ts,
-        users: Object.values(userDisplayNames),
-        summary,
-        ts: new Date(),
-      });
-      await db.collection("messages").deleteMany({
-        _id: { $in: toSummarize.map(m => m._id) }
-      });
-    } // End IF substantive
-  }
-  return res.insertedId;
-}
 
 // ---- ADMIN: FULL RESET ----
 async function handleAdminCommands(msg) {
@@ -789,13 +224,10 @@ async function handleAdminCommands(msg) {
   if (msg.content === "!arbiter_reset_all") {
     console.log("[DEBUG] Reset command matched - executing database reset");
     try {
-      // Completely reset the database structure
-      await resetDatabase();
+      // Completely reset the database structure and all storage caches
+      await resetAllData();
       
-      // Clear all in-memory caches
-      messageCache.clear();
-      contentAnalysisCache.clear();
-      contradictionValidationCache.clear();
+      // Clear remaining local caches
       latestSourcesByBotMsg.clear();
       
       console.log("[ADMIN] Complete database and memory reset performed by guild owner");
@@ -857,8 +289,10 @@ async function handleAdminCommands(msg) {
   
   if (msg.content === "!arbiter_status") {
     try {
+      const { aiCircuitBreaker, exaCircuitBreaker } = getCircuitBreakers();
       const aiStatus = aiCircuitBreaker.getStatus();
       const exaStatus = exaCircuitBreaker.getStatus();
+      const storageCacheStatus = getCacheStatus();
       
       await msg.reply(
         `⚡ **SYSTEM STATUS** ⚡\n\n` +
@@ -871,9 +305,9 @@ async function handleAdminCommands(msg) {
         `• Failures: ${exaStatus.failureCount}\n` +
         `• Last Failure: ${exaStatus.lastFailureTime ? new Date(exaStatus.lastFailureTime).toLocaleString() : 'None'}\n\n` +
         `**Cache Status:**\n` +
-        `• Message Cache: ${messageCache.size} entries\n` +
-        `• Analysis Cache: ${contentAnalysisCache.size} entries\n` +
-        `• Validation Cache: ${contradictionValidationCache.size} entries`
+        `• Message Cache: ${storageCacheStatus.messageCache} entries\n` +
+        `• Analysis Cache: ${storageCacheStatus.contentAnalysisCache} entries\n` +
+        `• Validation Cache: ${storageCacheStatus.contradictionValidationCache} entries`
       );
       return true;
     } catch (e) {
@@ -886,329 +320,7 @@ async function handleAdminCommands(msg) {
   return false;
 }
 
-// ---- EXA FACT CHECK AND NEWS HELPERS WITH CIRCUIT BREAKER ----
-const EXA_API_KEY = process.env.EXA_API_KEY;
-
-async function exaAnswer(query) {
-  return await exaCircuitBreaker.execute(async () => {
-    const res = await axios.post(
-      "https://api.exa.ai/answer",
-      { query, type: "neural" },
-      { headers: { Authorization: `Bearer ${EXA_API_KEY}` } }
-    );
-    let urls = [];
-    if (res.data?.urls) {
-      urls = Array.isArray(res.data.urls) ? res.data.urls : [res.data.urls];
-      urls = urls.map(u => cleanUrl(u));
-    }
-    if ((!urls.length) && typeof res.data.answer === "string") {
-      const re = /(https?:\/\/[^\s<>"'`]+)/g;
-      urls = Array.from(res.data.answer.matchAll(re), m => cleanUrl(m[1]));
-    }
-    return { answer: res.data.answer || "", urls: urls };
-  }).catch(err => {
-    console.warn("Exa /answer failed:", err.message);
-    return { answer: "", urls: [] };
-  });
-}
-
-async function exaSearch(query, numResults = 10) {
-  return await exaCircuitBreaker.execute(async () => {
-    const res = await axios.post(
-      "https://api.exa.ai/search",
-      { query, numResults },
-      { headers: { Authorization: `Bearer ${EXA_API_KEY}` } }
-    );
-    return Array.isArray(res.data.results) ? res.data.results : [];
-  }).catch(err => {
-    console.warn("Exa /search failed:", err.message);
-    return [];
-  });
-}
-
-// ---- AI UTILS WITH RATE LIMITING & CIRCUIT BREAKERS ----
-async function aiFlash(prompt) {
-  if (!backgroundLimit) {
-    console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
-    return await aiCircuitBreaker.execute(async () => {
-      return aiBackground(prompt);
-    });
-  }
-  
-  console.log(`[RATE LIMIT] Background AI queued (${backgroundLimit.pendingCount} pending, ${backgroundLimit.activeCount} active)`);
-  return await backgroundLimit(() => {
-    return aiCircuitBreaker.execute(async () => {
-      console.log("[RATE LIMIT] Background AI executing");
-      return aiBackground(prompt);
-    });
-  });
-}
-
-async function aiFactCheckFlash(prompt) {
-  if (!factCheckLimit) {
-    console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
-    return await aiCircuitBreaker.execute(async () => {
-      return aiFactCheck(prompt);
-    });
-  }
-  
-  console.log(`[RATE LIMIT] FactCheck AI queued (${factCheckLimit.pendingCount} pending, ${factCheckLimit.activeCount} active)`);
-  return await factCheckLimit(() => {
-    return aiCircuitBreaker.execute(async () => {
-      console.log("[RATE LIMIT] FactCheck AI executing");
-      return aiFactCheck(prompt);
-    });
-  });
-}
-
-// ---- DETECTION LOGIC ----
-async function detectContradictionOrMisinformation(msg) {
-  let contradiction = null;
-  let contradictionEvidenceUrl = "";
-  let misinformation = null;
-
-  // Using global configuration for logical principles
-
-  console.log(`[DEBUG] Starting detection for: "${msg.content}"`);
-  
-  // Trivial message & other bot command skip for contradiction/misinformation:
-  const isTrivial = isTrivialOrSafeMessage(msg.content);
-  const isBotCommand = isOtherBotCommand(msg.content);
-  console.log(`[DEBUG] Message filters - Trivial: ${isTrivial}, Bot Command: ${isBotCommand}`);
-  
-  if (isTrivial || isBotCommand) {
-    console.log(`[DEBUG] Skipping detection - message filtered out`);
-    return { contradiction: null, misinformation: null };
-  }
-
-  const db = await connect();
-  const userMessages = await db.collection("messages")
-    .find({
-      type: "message",
-      user: msg.author.id,
-      channel: msg.channel.id,
-      guildId: msg.guildId,
-      discordMessageId: { $ne: msg.id }
-    })
-    .sort({ ts: -1 })
-    .limit(50)
-    .toArray();
-
-  const priorSubstantive = userMessages.filter(m => !isTrivialOrSafeMessage(m.content));
-  
-  // Duplicate detection: skip contradiction check for duplicates, but still check misinformation
-  console.log(`[DEBUG] Recent message history (last 5):`, priorSubstantive.slice(0, 5).map(m => m.content));
-  const isDuplicate = priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim();
-  if (isDuplicate) {
-    console.log(`[DEBUG] Duplicate detected - Previous: "${priorSubstantive[0].content}" vs Current: "${msg.content}"`);
-    console.log(`[DEBUG] Skipping contradiction check but proceeding with misinformation check`);
-  }
-  
-  console.log(`[DEBUG] Passed all filters, proceeding with detection logic`);
-  console.log(`[DEBUG] Prior substantive messages: ${priorSubstantive.length}`);
-
-  // ---- CONTRADICTION CHECK ----
-  if (priorSubstantive.length > 0 && !isDuplicate) {
-    const concatenated = priorSubstantive
-      .map(m =>
-        m.content.length > MAX_FACTCHECK_CHARS
-          ? m.content.slice(0, MAX_FACTCHECK_CHARS)
-          : m.content
-      )
-      .reverse()
-      .join("\n");
-    const mainContent =
-      msg.content.length > MAX_FACTCHECK_CHARS
-        ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
-        : msg.content;
-    
-    // Analyze current message for logical context (with caching)
-    const contentAnalysis = analyzeLogicalContent(mainContent, contentAnalysisCache);
-    console.log(`[DEBUG] Content analysis:`, contentAnalysis);
-    
-    // Early exit for low substantiveness content
-    if (contentAnalysis.substantiveness < 0.4) {
-      console.log(`[DEBUG] Low substantiveness (${contentAnalysis.substantiveness}) - skipping expensive AI analysis`);
-      return { contradiction: null, misinformation: null };
-    }
-    
-    const contradictionPrompt = `
-${SYSTEM_INSTRUCTIONS}
-
-${USE_LOGICAL_PRINCIPLES ? getLogicalContext('contradiction', { contentAnalysis }) : ''}
-
-You are a precise contradiction detector for debate analysis.${USE_LOGICAL_PRINCIPLES ? ' You have access to advanced logical principles above.' : ''}
-
-CONTENT ANALYSIS INSIGHTS:
-- Uncertainty level: ${contentAnalysis.hasUncertainty ? 'HIGH' : 'LOW'}
-- Temporal qualifiers: ${contentAnalysis.hasTemporal ? 'PRESENT' : 'ABSENT'}  
-- Absolute claims: ${contentAnalysis.hasAbsolutes ? 'PRESENT' : 'ABSENT'}
-- Evidence provided: ${contentAnalysis.hasEvidence ? 'YES' : 'NO'}
-${contentAnalysis.recommendations.length > 0 ? '\nRECOMMENDATIONS:\n' + contentAnalysis.recommendations.map(r => `• ${r}`).join('\n') : ''}
-Does the [New message] create a DIRECT LOGICAL CONTRADICTION with any of the [Previous statements] sent by **this exact same user** below?
-
-IMPORTANT: Only flag TRUE contradictions where both statements cannot possibly be true simultaneously. Do NOT flag:
-- Different opinions on the same topic
-- Nuanced positions or clarifications  
-- Temporal changes in viewpoint
-- Degrees of certainty vs absolute claims
-- Different aspects of complex issues
-
-Always reply in strict JSON of the form:
-{"contradiction":"yes"|"no", "reason":"...", "evidence":"...", "contradicting":"...", "url":"..."}
-- "contradiction": Use "yes" ONLY if statements are absolutely logically incompatible (both cannot be true). This includes cross-message contradictions (current message vs previous messages) AND self-contradictions (contradictory statements within the current message itself). Examples: "X is true" vs "X is false", "All Y are Z" vs "No Y are Z", "A happened" vs "A never happened". IMPORTANT: Do NOT flag semantically similar statements as contradictory (e.g., "flat" and "disc" both describe non-spherical shapes). Use "no" for different opinions, nuanced disagreements, clarifications, or semantically similar statements.
-- "reason": For "yes", explain precisely WHY these statements cannot both be true simultaneously. Focus on the actual logical impossibility using the exact words from both statements. Base your reasoning ONLY on what is explicitly stated - do not infer meanings that aren't clearly present. Example: "A person cannot simultaneously claim 'X does not exist' and 'I was affected by X'" For "no", use an empty string.
-- "evidence": For "yes", provide the EXACT first/earlier contradicted statement. For cross-message: quote from previous message. For self-contradiction: quote the first contradictory segment from current message. Quote exactly - do not paraphrase. For "no", use an empty string.
-- "contradicting": For "yes", provide the EXACT second/later contradicting statement. For cross-message: quote from current message. For self-contradiction: quote the second contradictory segment from current message. Quote exactly - do not paraphrase. For "no", use an empty string.
-- "url": For "yes", include a direct Discord link to the contradictory message (format: https://discord.com/channels/<server_id>/<channel_id>/<message_id>). For "no", use an empty string.
-In all cases, never reply with non-JSON or leave any field out. If you do not find a TRUE logical contradiction, respond "contradiction":"no".
-[Previous statements]
-${concatenated}
-[New message]
-${mainContent}
-`.trim();
-    try {
-      const { result } = await aiFlash(contradictionPrompt);
-      let parsed = null;
-      try {
-        const match = result.match(/\{[\s\S]*?\}/);
-        if (match) parsed = JSON.parse(match[0]);
-      } catch {}
-      if (parsed && parsed.contradiction === "yes") {
-        console.log(`[DEBUG] Contradiction detected, searching for evidence: "${parsed.evidence}"`);
-        console.log(`[DEBUG] Available message history:`, priorSubstantive.map(m => `"${m.content}"`));
-        
-        // Find and link the matching prior message by content - try multiple matching strategies
-        let evidenceMsg = null;
-        
-        if (parsed.evidence) {
-          // Strategy 1: Exact match
-          evidenceMsg = priorSubstantive.find(m => m.content.trim() === parsed.evidence.trim());
-          console.log(`[DEBUG] Exact match: ${evidenceMsg ? 'FOUND' : 'NOT FOUND'}`);
-          
-          // Strategy 2: Fuzzy match if exact fails  
-          if (!evidenceMsg) {
-            evidenceMsg = priorSubstantive.find(m => 
-              m.content.includes(parsed.evidence.trim()) || 
-              parsed.evidence.includes(m.content.trim())
-            );
-            console.log(`[DEBUG] Fuzzy match: ${evidenceMsg ? 'FOUND' : 'NOT FOUND'}`);
-          }
-          
-          // Strategy 3: Check if evidence actually exists in history
-          if (!evidenceMsg) {
-            console.log(`[DEBUG] WARNING: AI quoted evidence that doesn't exist in message history!`);
-            console.log(`[DEBUG] Rejecting contradiction due to invalid evidence matching`);
-            contradiction = null; // Reject invalid contradictions
-          } else {
-            // Advanced semantic validation to prevent false contradictions (with caching)
-            const validationKey = `${evidenceMsg.content}|${msg.content}`;
-            let isValidContradiction = contradictionValidationCache.get(validationKey);
-            
-            if (isValidContradiction === undefined) {
-              isValidContradiction = validateContradiction(evidenceMsg.content, msg.content);
-              contradictionValidationCache.set(validationKey, isValidContradiction);
-            } else {
-              console.log(`[DEBUG] Using cached validation result`);
-            }
-            
-            console.log(`[DEBUG] Semantic validation result: ${isValidContradiction ? 'VALID' : 'INVALID'}`);
-            
-            if (!isValidContradiction) {
-              console.log(`[DEBUG] Semantic analysis rejected contradiction - likely false positive`);
-              contradiction = null;
-            }
-          }
-        }
-        
-        if (evidenceMsg) {
-          console.log(`[DEBUG] Using evidence from message: "${evidenceMsg.content}"`);
-        }
-        
-        contradictionEvidenceUrl =
-          evidenceMsg && evidenceMsg.discordMessageId
-            ? `https://discord.com/channels/${evidenceMsg.guildId}/${evidenceMsg.channel}/${evidenceMsg.discordMessageId}`
-            : "";
-        parsed.url = contradictionEvidenceUrl;
-        contradiction = parsed;
-      }
-    } catch (e) {
-      console.warn("Contradiction detection error:", e);
-    }
-  }
-  
-  // ---- MISINFORMATION CHECK ----
-  console.log(`[DEBUG] Contradiction result: ${contradiction ? 'FOUND' : 'NONE'}, proceeding to misinformation check`);
-  // Always check misinformation regardless of contradiction status
-    const mainContent =
-      msg.content.length > MAX_FACTCHECK_CHARS
-        ? msg.content.slice(0, MAX_FACTCHECK_CHARS)
-        : msg.content;
-    const answer = await exaAnswer(mainContent);
-    console.log(`[DEBUG] Exa answer for "${mainContent}":`, answer);
-    
-    // Do not check LLM if Exa answer is missing/empty/meaningless
-    if (!answer || answer.answer.trim() === "" || /no relevant results|no results/i.test(answer.answer)) {
-      console.log(`[DEBUG] Skipping LLM check - Exa returned no useful context`);
-      return { contradiction, misinformation: null };
-    }
-
-    // Analyze content for misinformation context (with caching)
-    const misinfoContentAnalysis = analyzeLogicalContent(mainContent, contentAnalysisCache);
-    
-    // Skip misinformation check for low substantiveness content
-    if (misinfoContentAnalysis.substantiveness < 0.3) {
-      console.log(`[DEBUG] Low substantiveness for misinformation check (${misinfoContentAnalysis.substantiveness}) - skipping`);
-      return { contradiction, misinformation: null };
-    }
-    
-    const misinfoPrompt = `
-${SYSTEM_INSTRUCTIONS}
-
-${USE_LOGICAL_PRINCIPLES ? getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis }) : ''}
-
-You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.${USE_LOGICAL_PRINCIPLES ? ' You have access to logical principles above.' : ''}
-
-CONTENT ANALYSIS FOR FACT-CHECKING:
-- User certainty level: ${misinfoContentAnalysis.hasUncertainty ? 'UNCERTAIN (less likely to be misinformation)' : 'DEFINITIVE'}
-- Evidence backing: ${misinfoContentAnalysis.hasEvidence ? 'SOME PROVIDED' : 'NONE PROVIDED'}
-- Claim type: ${misinfoContentAnalysis.hasAbsolutes ? 'ABSOLUTE' : 'QUALIFIED'}
-${misinfoContentAnalysis.recommendations.length > 0 ? '\nANALYSIS NOTES:\n' + misinfoContentAnalysis.recommendations.map(r => `• ${r}`).join('\n') : ''}
-Does the [User message] contain dangerous misinformation that the user is personally making, asserting, or endorsing according to the [Web context]?
-IMPORTANT: Only flag messages where the user is directly claiming or promoting false information. Do NOT flag messages where the user is merely reporting what others say, expressing uncertainty, rejecting false claims, or discussing misinformation without endorsing it.
-Always reply in strict JSON of the form:
-{"misinformation":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
-- "misinformation": Use "yes" ONLY if the user is personally asserting/claiming/endorsing CRITICAL misinformation that is:
-  * Medically dangerous (false health/vaccine claims, dangerous treatments)
-  * Scientifically harmful (flat earth, climate denial with policy implications)  
-  * Falsified conspiratorial claims that can be definitively debunked with evidence (e.g. claims about public figures that contradict documented facts)
-  * Deliberately deceptive with serious consequences
-  Use "no" for: reporting what others say ("people say X"), expressing uncertainty ("I don't know if X"), rejecting false claims ("X is just a conspiracy theory"), academic discussion of misinformation, contested/debated claims, minor inaccuracies, nuanced disagreements, opinions, jokes, or unfalsified conspiracy theories. The user must be ACTIVELY PROMOTING false information, and it must be DEFINITIVELY and UNAMBIGUOUSLY proven false by the evidence.
-- "reason": For "yes", state precisely what makes the message critically false, definitively debunked, and potentially harmful. For "no", explain why: e.g. it is accurate, contested but not definitively false, minor inaccuracy, opinion, joke, or not critically harmful.
-- "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the harmful claim. For "no", use an empty string.
-- "url": For "yes", include the URL that contains the corroborating source material. For "no", use an empty string.
-In all cases, never reply with non-JSON or leave any field out. If you can't find suitable evidence or the claim isn't critically harmful, respond "misinformation":"no".
-[User message]
-${msg.content}
-[Web context]
-${answer.answer}
-`.trim();
-    try {
-      const { result } = await aiFactCheckFlash(misinfoPrompt);
-      let parsed = null;
-      try {
-        const match = result.match(/\{[\s\S]*?\}/);
-        if (match) parsed = JSON.parse(match[0]);
-      } catch {}
-      if (parsed && parsed.misinformation === "yes") {
-        misinformation = parsed;
-      }
-    } catch (e) {
-      console.warn("Misinformation detection error:", e);
-    }
-  
-  return { contradiction, misinformation };
-}
+// AI utility functions are now imported from ai-utils.js
 
 // ------ DISCORD BOT EVENT HANDLER ------
 client.once("ready", async () => {
@@ -1219,11 +331,11 @@ client.once("ready", async () => {
   console.log(`- MONGODB_URI: ${process.env.MONGODB_URI ? 'SET' : 'MISSING'}`);
   console.log(`- EXA_API_KEY: ${process.env.EXA_API_KEY ? 'SET' : 'MISSING'}`);
   
-  // Initialize rate limiting
+  // Initialize AI utilities (rate limiting and circuit breakers)
   try {
-    await initializeRateLimiting();
+    await initializeAIUtils();
   } catch (error) {
-    console.error("[ERROR] Failed to initialize rate limiting:", error);
+    console.error("[ERROR] Failed to initialize AI utilities:", error);
     process.exit(1);
   }
 });
@@ -1276,7 +388,7 @@ client.on("messageCreate", async (msg) => {
     // Store the message!
   let thisMsgId = null;
   try {
-    thisMsgId = await saveUserMessage(msg);
+    thisMsgId = await saveUserMessage(msg, aiSummarization, SYSTEM_INSTRUCTIONS);
   } catch (e) {
     console.warn("DB store/prune error:", e);
   }
@@ -1567,24 +679,7 @@ try {
 }
 
     // ---- Log bot reply to Mongo ----
-    try {
-      const db = await connect();
-      await db.collection("messages").insertOne({
-        type: "message",
-        user: client.user.id,
-        username: client.user.username || "Arbiter",
-        displayName: "Arbiter",
-        channel: msg.channel.id,
-        channelName: getChannelName(msg),
-        guildId: msg.guildId,
-        guildName: getGuildName(msg),
-        isBot: true,
-        content: truncateMessage(replyText),
-        ts: new Date(),
-      });
-    } catch (e) {
-      console.warn("DB insert error (bot reply):", e);
-    }
+    await saveBotReply(msg, truncateMessage(replyText), client.user);
 
   } catch (err) {
     try {
