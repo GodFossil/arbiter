@@ -1,9 +1,17 @@
+console.log("[STARTUP] Loading Arbiter bot...");
 require("dotenv").config();
+console.log("[STARTUP] Environment loaded");
 const express = require("express");
+console.log("[STARTUP] Express loaded");
+console.log("[STARTUP] Loading Discord.js...");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
+console.log("[STARTUP] Loading AI module...");
 const { aiUserFacing, aiSummarization } = require("./ai");
+console.log("[STARTUP] Loading logic module...");
 const { getSpecificPrinciple } = require("./logic");
+console.log("[STARTUP] Loading filters module...");
 const { isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
+console.log("[STARTUP] Loading storage module...");
 const {
   saveUserMessage,
   saveBotReply,
@@ -13,6 +21,7 @@ const {
   performCacheCleanup,
   resetAllData
 } = require("./storage");
+console.log("[STARTUP] Loading AI utils module...");
 const { 
   initializeAIUtils, 
   exaAnswer, 
@@ -21,7 +30,9 @@ const {
   getCircuitBreakers,
   getRateLimiters
 } = require("./ai-utils");
+console.log("[STARTUP] Loading detection module...");
 const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS } = require("./detection");
+console.log("[STARTUP] All modules loaded successfully");
 const app = express();
 
 const PORT = process.env.PORT || 3000;
@@ -302,8 +313,11 @@ async function handleAdminCommands(msg) {
 // AI utility functions are now imported from ai-utils.js
 
 // ------ DISCORD BOT EVENT HANDLER ------
+console.log("[DEBUG] Setting up Discord client event handlers...");
+
 client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}!`);
+  console.log(`[READY] Logged in as ${client.user.tag}!`);
+  console.log(`[READY] Bot ID: ${client.user.id}`);
   console.log(`[DEBUG] Bot ready. Required env vars check:`);
   console.log(`- DISCORD_TOKEN: ${process.env.DISCORD_TOKEN ? 'SET' : 'MISSING'}`);
   console.log(`- DO_AI_API_KEY: ${process.env.DO_AI_API_KEY ? 'SET' : 'MISSING'}`);
@@ -313,10 +327,21 @@ client.once("ready", async () => {
   // Initialize AI utilities (rate limiting and circuit breakers)
   try {
     await initializeAIUtils();
+    console.log("[READY] AI utilities initialized successfully");
   } catch (error) {
     console.error("[ERROR] Failed to initialize AI utilities:", error);
     process.exit(1);
   }
+  
+  console.log("[READY] Bot is fully ready to receive messages!");
+});
+
+client.on("error", error => {
+  console.error("[DISCORD ERROR]", error);
+});
+
+client.on("warn", warning => {
+  console.warn("[DISCORD WARN]", warning);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -342,6 +367,8 @@ client.on('interactionCreate', async interaction => {
   
 
 });
+
+console.log("[STARTUP] Setting up messageCreate event handler...");
 
 client.on("messageCreate", async (msg) => {
   console.log(`[DEBUG] Message received: "${msg.content}" from ${msg.author.username} (bot: ${msg.author.bot})`);
@@ -700,4 +727,10 @@ try {
     console.error("AI user-facing failed:", err);
     }
 }});
-client.login(process.env.DISCORD_TOKEN);
+console.log("[STARTUP] Attempting to login to Discord...");
+client.login(process.env.DISCORD_TOKEN).then(() => {
+  console.log("[STARTUP] Discord login successful!");
+}).catch(error => {
+  console.error("[STARTUP] Discord login failed:", error);
+  process.exit(1);
+});
