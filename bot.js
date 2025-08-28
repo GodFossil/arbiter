@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
-const { aiUserFacing } = require("./ai");
+const { aiUserFacing, aiSummarization } = require("./ai");
 const { getSpecificPrinciple } = require("./logic");
 const { isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
 const {
@@ -21,7 +21,7 @@ const {
   getCircuitBreakers,
   getRateLimiters
 } = require("./ai-utils");
-const { detectContradictionOrMisinformation } = require("./detection");
+const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS } = require("./detection");
 const app = express();
 
 const PORT = process.env.PORT || 3000;
