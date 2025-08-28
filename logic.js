@@ -132,10 +132,9 @@ const CONTEXT_FRAMEWORKS = {
 /**
  * Get context-aware logical principles for enhanced reasoning
  * @param {string} contextType - Type of reasoning context
- * @param {Object} options - Additional context options
  * @returns {string} Formatted logical principles for prompt injection
  */
-function getLogicalContext(contextType = 'general', options = {}) {
+function getLogicalContext(contextType = 'general') {
   console.log(`[LOGIC] Building ${contextType} reasoning framework`);
   
   const framework = CONTEXT_FRAMEWORKS[contextType] || CONTEXT_FRAMEWORKS.general;

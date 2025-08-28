@@ -1,42 +1,27 @@
 require("dotenv").config();
 const express = require("express");
 const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
-const { resetDatabase } = require("./mongo");
-const { aiUserFacing, aiBackground, aiSummarization, aiFactCheck } = require("./ai");
-const { getLogicalContext, analyzeLogicalContent, getSpecificPrinciple } = require("./logic");
-const { KNOWN_BOT_COMMANDS, TRIVIAL_PATTERNS, isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
+const { aiUserFacing } = require("./ai");
+const { getSpecificPrinciple } = require("./logic");
+const { isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
 const {
-  messageCache,
-  contentAnalysisCache,
-  contradictionValidationCache,
   saveUserMessage,
   saveBotReply,
   fetchUserHistory,
   fetchChannelHistory,
-  fetchUserMessagesForDetection,
-  clearAllCaches,
   getCacheStatus,
   performCacheCleanup,
-  resetAllData,
-  getDisplayName,
-  getChannelName,
-  getGuildName,
-  getDisplayNameById,
-  isTrivialOrSafeMessage: isTrivialOrSafeMessageFromStorage
+  resetAllData
 } = require("./storage");
 const { 
-  CircuitBreaker, 
   initializeAIUtils, 
-  aiFlash, 
-  aiFactCheckFlash, 
   exaAnswer, 
   exaSearch, 
   cleanUrl,
   getCircuitBreakers,
-  EXA_API_KEY 
+  getRateLimiters
 } = require("./ai-utils");
-const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS } = require("./detection");
-const axios = require("axios");
+const { detectContradictionOrMisinformation } = require("./detection");
 const app = express();
 
 const PORT = process.env.PORT || 3000;
@@ -75,13 +60,7 @@ function isBotActiveInChannel(msg) {
 
 
 
-// ---- TUNEABLE PARAMETERS ----
-const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
-const SUMMARY_BLOCK_SIZE = 20;
-const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
-const USE_LOGICAL_PRINCIPLES = true; // TODO: Make this configurable for testing
-
-// Circuit breakers are now imported from ai-utils.js
+// These constants are now defined in their respective modules
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -96,7 +75,7 @@ You are the invaluable assistant of our Discord debate server. The server is cal
 // ---- UTILITIES ----
 async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap) {
   // Generate a unique ID for this button interaction
-  const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
   
   const replyMsg = await msg.reply({
     ...replyOptions,
@@ -633,6 +612,9 @@ ${referencedSection}
 
     let replyText;
     try {
+      const { userFacingLimit } = getRateLimiters();
+      const { aiCircuitBreaker } = getCircuitBreakers();
+      
       if (!userFacingLimit) {
         console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
         const { result } = await aiCircuitBreaker.execute(async () => {
