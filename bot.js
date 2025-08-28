@@ -728,9 +728,27 @@ try {
     }
 }});
 console.log("[STARTUP] Attempting to login to Discord...");
-client.login(process.env.DISCORD_TOKEN).then(() => {
-  console.log("[STARTUP] Discord login successful!");
-}).catch(error => {
-  console.error("[STARTUP] Discord login failed:", error);
-  process.exit(1);
-});
+console.log(`[DEBUG] Token present: ${process.env.DISCORD_TOKEN ? 'YES' : 'NO'}`);
+console.log(`[DEBUG] Token length: ${process.env.DISCORD_TOKEN?.length || 0}`);
+
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => {
+    console.log("[STARTUP] Discord login promise resolved!");
+  })
+  .catch(error => {
+    console.error("[STARTUP] Discord login failed:", error);
+    console.error("[STARTUP] Error details:", error.message);
+    process.exit(1);
+  });
+
+// Add timeout to detect if login hangs
+setTimeout(() => {
+  if (!client.user) {
+    console.error("[STARTUP] Discord login timeout - bot never became ready");
+    console.log("[DEBUG] Client state:", {
+      readyAt: client.readyAt,
+      user: client.user?.tag || 'null',
+      status: client.ws?.status || 'unknown'
+    });
+  }
+}, 30000); // 30 second timeout
