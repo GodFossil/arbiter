@@ -344,25 +344,53 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.on("messageCreate", async (msg) => {
+  console.log(`[DEBUG] Message received: "${msg.content}" from ${msg.author.username} (bot: ${msg.author.bot})`);
+  
   // Filter for allowed channel types and whitelisted channels (text, thread, forum)
-  if (
-    msg.author.bot ||
-    !(
-      msg.channel.type === ChannelType.GuildText ||
-      msg.channel.type === ChannelType.PublicThread ||
-      msg.channel.type === ChannelType.PrivateThread ||
-      msg.channel.type === ChannelType.AnnouncementThread ||
-      msg.channel.type === ChannelType.GuildForum
-    ) ||
-    !isBotActiveInChannel(msg)
-  ) return;
+  if (msg.author.bot) {
+    console.log(`[DEBUG] Ignoring bot message`);
+    return;
+  }
+  
+  if (!(
+    msg.channel.type === ChannelType.GuildText ||
+    msg.channel.type === ChannelType.PublicThread ||
+    msg.channel.type === ChannelType.PrivateThread ||
+    msg.channel.type === ChannelType.AnnouncementThread ||
+    msg.channel.type === ChannelType.GuildForum
+  )) {
+    console.log(`[DEBUG] Ignoring message from unsupported channel type: ${msg.channel.type}`);
+    return;
+  }
+  
+  if (!isBotActiveInChannel(msg)) {
+    console.log(`[DEBUG] Bot not active in this channel`);
+    return;
+  }
+
+  console.log(`[DEBUG] Message passed initial filters, checking admin commands`);
 
   // Handle admin commands FIRST (before any filtering)
   const handled = await handleAdminCommands(msg);
-  if (handled) return;
+  if (handled) {
+    console.log(`[DEBUG] Admin command handled`);
+    return;
+  }
 
+  console.log(`[DEBUG] Checking for trivial/bot commands`);
+  
   // Ignore trivial content or known other bot commands
-  if (isOtherBotCommand(msg.content) || isTrivialOrSafeMessage(msg.content)) return;
+  if (isOtherBotCommand(msg.content)) {
+    console.log(`[DEBUG] Ignoring other bot command: ${msg.content}`);
+    return;
+  }
+  
+  if (isTrivialOrSafeMessage(msg.content)) {
+    console.log(`[DEBUG] Ignoring trivial message: ${msg.content}`);
+    return;
+  }
+
+  console.log(`[DEBUG] Message passed all filters, proceeding with processing`);
 
     // Store the message!
   let thisMsgId = null;
@@ -373,6 +401,7 @@ client.on("messageCreate", async (msg) => {
   }
 
   const isMentioned = msg.mentions.has(client.user);
+  console.log(`[DEBUG] Bot mentioned: ${isMentioned}`);
   let isReplyToBot = false;
   let repliedToMsg = null;
   if (msg.reference && msg.reference.messageId) {
@@ -380,6 +409,7 @@ client.on("messageCreate", async (msg) => {
       repliedToMsg = await msg.channel.messages.fetch(msg.reference.messageId);
       if (repliedToMsg.author.id === client.user.id) {
         isReplyToBot = true;
+        console.log(`[DEBUG] Reply to bot detected`);
       }
     } catch (e) {
       repliedToMsg = null;
