@@ -39,6 +39,7 @@ const PORT = process.env.PORT || 3000;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
 app.listen(PORT, () => console.log(`Keepalive server running on port ${PORT}`));
 
+console.log("[DEBUG] Creating Discord client with intents...");
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -57,6 +58,7 @@ const client = new Client({
     Partials.ThreadMember
   ]
 });
+console.log("[DEBUG] Discord client created successfully");
 
 const ALLOWED_CHANNELS = process.env.ALLOWED_CHANNELS
   ? process.env.ALLOWED_CHANNELS.split(',').map(s => s.trim()).filter(Boolean)
@@ -334,6 +336,8 @@ client.once("ready", async () => {
   }
   
   console.log("[READY] Bot is fully ready to receive messages!");
+  console.log(`[DEBUG] Bot intents: ${client.options.intents}`);
+  console.log(`[DEBUG] Bot in ${client.guilds.cache.size} guilds`);
 });
 
 client.on("error", error => {
@@ -342,6 +346,24 @@ client.on("error", error => {
 
 client.on("warn", warning => {
   console.warn("[DISCORD WARN]", warning);
+});
+
+client.on("debug", info => {
+  if (info.includes("Connecting to gateway") || info.includes("Identifying") || info.includes("Ready") || info.includes("Session")) {
+    console.log("[DISCORD DEBUG]", info);
+  }
+});
+
+client.on("shardError", error => {
+  console.error("[DISCORD SHARD ERROR]", error);
+});
+
+client.on("shardReconnecting", () => {
+  console.log("[DISCORD] Shard reconnecting...");
+});
+
+client.on("shardDisconnect", () => {
+  console.log("[DISCORD] Shard disconnected");
 });
 
 client.on('interactionCreate', async interaction => {
