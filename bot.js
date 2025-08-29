@@ -584,29 +584,43 @@ client.on("messageCreate", async (msg) => {
     console.log(`[DEBUG] Bot mentioned or replied to. Processing reply...`);
   try {
     await msg.channel.sendTyping();
+    console.log(`[DEBUG] Typing indicator sent`);
+    
     let userHistoryArr = null, channelHistoryArr = null;
+    console.log(`[DEBUG] Fetching user history...`);
     try {
       userHistoryArr = await fetchUserHistory(
         msg.author.id, msg.channel.id, msg.guildId, 10, thisMsgId
       );
+      console.log(`[DEBUG] User history fetched: ${userHistoryArr?.length || 0} messages`);
     } catch (e) {
+      console.error(`[DEBUG] User history fetch failed:`, e);
       userHistoryArr = null;
-      try { await msg.reply("The past refuses to reveal itself."); } catch {}
+      try { await msg.reply("The past refuses to reveal itself."); return; } catch {}
     }
+    
+    console.log(`[DEBUG] Fetching channel history...`);
     try {
       channelHistoryArr = await fetchChannelHistory(
         msg.channel.id, msg.guildId, 15, thisMsgId
       );
+      console.log(`[DEBUG] Channel history fetched: ${channelHistoryArr?.length || 0} messages`);
     } catch (e) {
+      console.error(`[DEBUG] Channel history fetch failed:`, e);
       channelHistoryArr = null;
       try { await msg.reply("All context is lost to the ether."); } catch {}
     }
+    console.log(`[DEBUG] History check - User: ${userHistoryArr ? 'OK' : 'NULL'}, Channel: ${channelHistoryArr ? 'OK' : 'NULL'}`);
+    
     if (!userHistoryArr || !channelHistoryArr) {
+      console.log(`[DEBUG] Insufficient history - exiting user-facing reply`);
       try {
         await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
       } catch {}
       return;
     }
+    
+    console.log(`[DEBUG] History sufficient, proceeding with reply generation`);
 
     const allHistContent = [
       ...userHistoryArr.map(m => m.content),
