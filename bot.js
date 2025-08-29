@@ -8,7 +8,7 @@ const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, Butt
 console.log("[STARTUP] Loading AI module...");
 const { aiUserFacing, aiSummarization } = require("./ai");
 console.log("[STARTUP] Loading logic module...");
-const { getSpecificPrinciple } = require("./logic");
+const { getSpecificPrinciple, getLogicalContext } = require("./logic");
 console.log("[STARTUP] Loading filters module...");
 const { isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
 console.log("[STARTUP] Loading storage module...");
@@ -496,6 +496,7 @@ client.on("messageCreate", async (msg) => {
 
   // ============ BACKGROUND DETECTION =============
   // Check if detection is enabled globally
+  console.log(`[DEBUG] Detection enabled status: ${DETECTION_ENABLED}`);
   if (!DETECTION_ENABLED) {
     console.log(`[DEBUG] Detection disabled globally - skipping background detection`);
   } else {
