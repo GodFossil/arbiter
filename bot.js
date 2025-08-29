@@ -495,8 +495,10 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ============ BACKGROUND DETECTION =============
-  // Check if detection is enabled globally
+  // Check if detection is enabled globally and store results for potential use in user-facing replies
   console.log(`[DEBUG] Detection enabled status: ${DETECTION_ENABLED}`);
+  let detectionResults = null;
+  
   if (!DETECTION_ENABLED) {
     console.log(`[DEBUG] Detection disabled globally - skipping background detection`);
   } else {
@@ -507,18 +509,21 @@ client.on("messageCreate", async (msg) => {
       msg.content.length > 8; // Minimum substantive length
     
     if (shouldRunDetection) {
-    console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
-    (async () => {
-      let detection = null;
+      console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
       try {
-        detection = await detectContradictionOrMisinformation(msg);
-        console.log(`[DEBUG] Detection result:`, detection);
+        detectionResults = await detectContradictionOrMisinformation(msg);
+        console.log(`[DEBUG] Detection result:`, detectionResults);
       } catch (e) {
         console.warn("Detection failure (silent to user):", e);
       }
-      if (detection) {
-        const hasContradiction = detection.contradiction && detection.contradiction.contradiction === "yes";
-        const hasMisinformation = detection.misinformation && detection.misinformation.misinformation === "yes";
+      
+      // Only send immediate detection alerts if user is NOT mentioning/replying to bot
+      const isUserFacingTrigger = isMentioned || isReplyToBot;
+      console.log(`[DEBUG] User-facing trigger: ${isUserFacingTrigger}, will ${isUserFacingTrigger ? 'defer' : 'send'} detection alerts`);
+      
+      if (detectionResults && !isUserFacingTrigger) {
+        const hasContradiction = detectionResults.contradiction && detectionResults.contradiction.contradiction === "yes";
+        const hasMisinformation = detectionResults.misinformation && detectionResults.misinformation.misinformation === "yes";
         
         // Handle combined detection or individual detection
         if (hasContradiction && hasMisinformation) {
@@ -526,16 +531,16 @@ client.on("messageCreate", async (msg) => {
           const combinedReply = 
             `⚡🚩 **CONTRADICTION & MISINFORMATION DETECTED** 🚩⚡\n\n` +
             `**CONTRADICTION FOUND:**\n` +
-            `-# \`\`\`${detection.contradiction.evidence}\`\`\`\n` +
-            `-# \`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n` +
-            `${detection.contradiction.reason}\n\n` +
+            `-# \`\`\`${detectionResults.contradiction.evidence}\`\`\`\n` +
+            `-# \`\`\`${detectionResults.contradiction.contradicting || msg.content}\`\`\`\n` +
+            `${detectionResults.contradiction.reason}\n\n` +
             `**MISINFORMATION FOUND:**\n` +
             `**False claim:** ${msg.content}\n` +
-            `**Why false:** ${detection.misinformation.reason}\n` +
-            (detection.misinformation.evidence ? `**Fact-check evidence:** ${detection.misinformation.evidence}` : "");
+            `**Why false:** ${detectionResults.misinformation.reason}\n` +
+            (detectionResults.misinformation.evidence ? `**Fact-check evidence:** ${detectionResults.misinformation.evidence}` : "");
           
-          const evidenceUrl = detection.contradiction.url || "";
-          const misinfoUrl = detection.misinformation.url || "";
+          const evidenceUrl = detectionResults.contradiction.url || "";
+          const misinfoUrl = detectionResults.misinformation.url || "";
           const allSources = [misinfoUrl].filter(Boolean);
           
           if (evidenceUrl && allSources.length > 0) {
@@ -578,11 +583,11 @@ client.on("messageCreate", async (msg) => {
           // CONTRADICTION ONLY
           const contradictionReply = 
             `⚡ **CONTRADICTION DETECTED** ⚡️\n\n` +
-            `-# \`\`\`${detection.contradiction.evidence}\`\`\`\n` +
-            `-# \`\`\`${detection.contradiction.contradicting || msg.content}\`\`\`\n\n` +
-            `${detection.contradiction.reason}`;
+            `-# \`\`\`${detectionResults.contradiction.evidence}\`\`\`\n` +
+            `-# \`\`\`${detectionResults.contradiction.contradicting || msg.content}\`\`\`\n\n` +
+            `${detectionResults.contradiction.reason}`;
           
-          const evidenceUrl = detection.contradiction.url || "";
+          const evidenceUrl = detectionResults.contradiction.url || "";
           
           if (evidenceUrl) {
             await msg.reply({
@@ -597,10 +602,10 @@ client.on("messageCreate", async (msg) => {
           // MISINFORMATION ONLY  
           const misinfoReply = 
             `🚩 **MISINFORMATION DETECTED** 🚩\n` +
-            `Reason: ${detection.misinformation.reason}\n` +
-            (detection.misinformation.evidence ? `Evidence: ${detection.misinformation.evidence}` : "");
+            `Reason: ${detectionResults.misinformation.reason}\n` +
+            (detectionResults.misinformation.evidence ? `Evidence: ${detectionResults.misinformation.evidence}` : "");
           
-          const sourcesForButton = detection.misinformation.url ? [detection.misinformation.url] : [];
+          const sourcesForButton = detectionResults.misinformation.url ? [detectionResults.misinformation.url] : [];
           
           if (sourcesForButton.length > 0) {
             await replyWithSourcesButton(msg, { content: truncateMessage(misinfoReply) }, sourcesForButton, latestSourcesByBotMsg);
@@ -608,8 +613,7 @@ client.on("messageCreate", async (msg) => {
             await msg.reply(truncateMessage(misinfoReply));
           }
         }
-      }
-    })();
+      } // End of detectionResults check
     } // End of shouldRunDetection check
   } // End of DETECTION_ENABLED check
 
@@ -655,6 +659,13 @@ client.on("messageCreate", async (msg) => {
     }
     
     console.log(`[DEBUG] History sufficient, proceeding with reply generation`);
+    
+    // Check if we have detection results to include in the response
+    const hasDetectionResults = detectionResults && DETECTION_ENABLED;
+    const hasContradiction = hasDetectionResults && detectionResults.contradiction && detectionResults.contradiction.contradiction === "yes";
+    const hasMisinformation = hasDetectionResults && detectionResults.misinformation && detectionResults.misinformation.misinformation === "yes";
+    
+    console.log(`[DEBUG] Including detection in reply: ${hasDetectionResults ? 'YES' : 'NO'} (Contradiction: ${hasContradiction}, Misinformation: ${hasMisinformation})`);
 
     const allHistContent = [
       ...userHistoryArr.map(m => m.content),
@@ -772,16 +783,45 @@ ${referencedSection}
       } catch (e) {}
     }
 
+    // ---- Build final reply including detection results ----
+    let finalReply = replyText;
+    let finalSources = [...sourcesUsed];
+    
+    // Add detection alerts to the reply if present
+    if (hasContradiction || hasMisinformation) {
+      console.log(`[DEBUG] Combining detection results with user-facing reply`);
+      
+      let detectionSection = "\n\n---\n";
+      
+      if (hasContradiction && hasMisinformation) {
+        detectionSection += `⚡🚩 **CONTRADICTION & MISINFORMATION DETECTED** 🚩⚡\n\n`;
+        detectionSection += `**CONTRADICTION:** ${detectionResults.contradiction.reason}\n`;
+        detectionSection += `**MISINFORMATION:** ${detectionResults.misinformation.reason}`;
+        
+        if (detectionResults.misinformation.url) finalSources.push(detectionResults.misinformation.url);
+      } else if (hasContradiction) {
+        detectionSection += `⚡ **CONTRADICTION DETECTED** ⚡\n`;
+        detectionSection += `${detectionResults.contradiction.reason}`;
+      } else if (hasMisinformation) {
+        detectionSection += `🚩 **MISINFORMATION DETECTED** 🚩\n`;
+        detectionSection += `${detectionResults.misinformation.reason}`;
+        
+        if (detectionResults.misinformation.url) finalSources.push(detectionResults.misinformation.url);
+      }
+      
+      finalReply += detectionSection;
+    }
+
     // ---- Send reply, platform source button if URLs exist ----
-    console.log('[DEBUG] sourcesUsed:', sourcesUsed);
+    console.log('[DEBUG] finalSources:', finalSources);
 try {
-  const filteredSources = [...new Set(sourcesUsed
+  const filteredSources = [...new Set(finalSources
     .map(u => cleanUrl(u))
     .filter(u => typeof u === "string" && u.startsWith("http")))];
   if (filteredSources.length > 0) {
-    await replyWithSourcesButton(msg, { content: truncateMessage(replyText) }, filteredSources, latestSourcesByBotMsg);
+    await replyWithSourcesButton(msg, { content: truncateMessage(finalReply) }, filteredSources, latestSourcesByBotMsg);
   } else {
-    await msg.reply(truncateMessage(replyText));
+    await msg.reply(truncateMessage(finalReply));
   }
 } catch (e) {
   console.error("Discord reply failed:", e);
