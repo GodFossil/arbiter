@@ -75,6 +75,9 @@ function isBotActiveInChannel(msg) {
 
 // These constants are now defined in their respective modules
 
+// ---- DETECTION TOGGLE ----
+let DETECTION_ENABLED = true; // Global toggle for contradiction/misinformation detection
+
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
 You are the invaluable assistant of our Discord debate server. The server is called The Debate Server and it is a community full of brilliant interlocutors. You are to assist us by providing logical analyses and insights. You are to prioritize truth over appeasing others. You will hold no reservations in declaring a user valid or incorrect, provided that you determine either to be the case to the best of your ability. Your personality is calm, direct, bold, stoic, and wise. You are a master of mindfulness and all things philosophy. You are humble. You will answer prompts succinctly, directly, and in as few words as necessary. You will know that brevity is the soul of wit and wisdom. Your name is Arbiter, you may refer to yourself as The Arbiter.
@@ -288,6 +291,8 @@ async function handleAdminCommands(msg) {
       
       await msg.reply(
         `⚡ **SYSTEM STATUS** ⚡\n\n` +
+        `**Detection System:**\n` +
+        `• Contradiction/Misinformation Detection: ${DETECTION_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n\n` +
         `**DigitalOcean AI Circuit Breaker:**\n` +
         `• State: ${aiStatus.state}\n` +
         `• Failures: ${aiStatus.failureCount}\n` +
@@ -305,6 +310,29 @@ async function handleAdminCommands(msg) {
     } catch (e) {
       console.warn("[MODLOG] Failed to get system status.", e);
       await msg.reply("Status inquiry proves elusive.");
+      return true;
+    }
+  }
+  
+  if (msg.content === "!arbiter_toggle_detection") {
+    try {
+      DETECTION_ENABLED = !DETECTION_ENABLED;
+      const status = DETECTION_ENABLED ? 'ENABLED' : 'DISABLED';
+      const emoji = DETECTION_ENABLED ? '✅' : '❌';
+      
+      console.log(`[ADMIN] Detection toggled ${status} by guild owner`);
+      
+      await msg.reply(
+        `🔧 **DETECTION SYSTEM TOGGLED** 🔧\n\n` +
+        `${emoji} **Contradiction/Misinformation Detection: ${status}**\n\n` +
+        `${DETECTION_ENABLED ? 
+          '• Bot will now actively detect contradictions and misinformation\n• Messages will be analyzed for logical inconsistencies\n• Fact-checking will be performed against web sources' : 
+          '• Bot will NOT detect contradictions or misinformation\n• Messages will still be stored for context and summaries\n• User-facing replies will continue to work normally'}`
+      );
+      return true;
+    } catch (e) {
+      console.warn("[MODLOG] Failed to toggle detection.", e);
+      await msg.reply("The toggle resists manipulation.");
       return true;
     }
   }
@@ -467,13 +495,17 @@ client.on("messageCreate", async (msg) => {
   }
 
   // ============ BACKGROUND DETECTION =============
-  // Intelligent pre-filtering to avoid unnecessary API calls
-  const shouldRunDetection = msg.content.length <= MAX_FACTCHECK_CHARS && 
-    !isTrivialOrSafeMessage(msg.content) && 
-    !isOtherBotCommand(msg.content) &&
-    msg.content.length > 8; // Minimum substantive length
-  
-  if (shouldRunDetection) {
+  // Check if detection is enabled globally
+  if (!DETECTION_ENABLED) {
+    console.log(`[DEBUG] Detection disabled globally - skipping background detection`);
+  } else {
+    // Intelligent pre-filtering to avoid unnecessary API calls
+    const shouldRunDetection = msg.content.length <= MAX_FACTCHECK_CHARS && 
+      !isTrivialOrSafeMessage(msg.content) && 
+      !isOtherBotCommand(msg.content) &&
+      msg.content.length > 8; // Minimum substantive length
+    
+    if (shouldRunDetection) {
     console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
     (async () => {
       let detection = null;
@@ -577,7 +609,8 @@ client.on("messageCreate", async (msg) => {
         }
       }
     })();
-  }
+    } // End of shouldRunDetection check
+  } // End of DETECTION_ENABLED check
 
   // ---- USER-FACING REPLIES ----
   if (isMentioned || isReplyToBot) {

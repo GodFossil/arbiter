@@ -67,6 +67,8 @@ PORT=3000 (optional, defaults to 3000)
 - **`!arbiter_reset_all`** - Completely wipe bot memory and message history
 - **`!arbiter_analyze [text]`** - Perform logical analysis on provided text content
 - **`!arbiter_principle [name]`** - Explain specific logical principles (nonContradiction, excludedMiddle, identity)
+- **`!arbiter_status`** - Show system status including circuit breakers, cache sizes, and detection state
+- **`!arbiter_toggle_detection`** - Toggle contradiction/misinformation detection on/off (messages still stored for context)
 
 ## Code Style & Conventions
 
