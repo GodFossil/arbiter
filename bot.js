@@ -31,7 +31,7 @@ const {
   getRateLimiters
 } = require("./ai-utils");
 console.log("[STARTUP] Loading detection module...");
-const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS } = require("./detection");
+const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS, USE_LOGICAL_PRINCIPLES } = require("./detection");
 console.log("[STARTUP] All modules loaded successfully");
 const app = express();
 
