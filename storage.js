@@ -76,6 +76,7 @@ const ANALYSIS_CACHE_TTL_MS = 60000; // 1 minute TTL for analysis cache
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
 const SUMMARY_BLOCK_SIZE = 20;
 const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
+const MAX_ANALYSIS_CACHE_SIZE = 300; // Prevent memory leaks
 
 // ---- UTILITY FUNCTIONS ----
 function getDisplayName(msg) {
@@ -337,6 +338,17 @@ function performCacheCleanup() {
   for (const [key, cached] of contentAnalysisCache.entries()) {
     if (cached && (Date.now() - cached.timestamp > ANALYSIS_CACHE_TTL_MS)) {
       contentAnalysisCache.delete(key);
+    }
+  }
+  
+  // Enforce size limit on analysis cache to prevent memory leaks
+  if (contentAnalysisCache.size > MAX_ANALYSIS_CACHE_SIZE) {
+    console.log(`[DEBUG] Analysis cache too large (${contentAnalysisCache.size}), removing oldest entries`);
+    const entries = Array.from(contentAnalysisCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp); // Sort by timestamp
+    const toRemove = Math.floor(MAX_ANALYSIS_CACHE_SIZE * 0.3); // Remove 30% of entries
+    for (let i = 0; i < toRemove; i++) {
+      contentAnalysisCache.delete(entries[i][0]);
     }
   }
   

@@ -145,6 +145,7 @@ function makeJumpButton(jumpUrl) {
 }
 
 let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
+const MAX_SOURCE_MAPPINGS = 500; // Prevent memory leaks
 
 setInterval(async () => {
   const cutoff = Date.now() - 3600 * 1000; // 1 hour cutoff
@@ -188,12 +189,23 @@ setInterval(async () => {
     
     // Remove from map regardless of button disable success
     latestSourcesByBotMsg.delete(id);
+}
+
+// Enforce size limit on source mappings to prevent memory leaks
+if (latestSourcesByBotMsg.size > MAX_SOURCE_MAPPINGS) {
+  console.log(`[DEBUG] Source mappings cache too large (${latestSourcesByBotMsg.size}), removing oldest entries`);
+  const entries = Array.from(latestSourcesByBotMsg.entries());
+  entries.sort((a, b) => a[1].timestamp - b[1].timestamp); // Sort by timestamp
+  const toRemove = Math.floor(MAX_SOURCE_MAPPINGS * 0.2); // Remove 20% of entries
+  for (let i = 0; i < toRemove; i++) {
+    latestSourcesByBotMsg.delete(entries[i][0]);
   }
-  
-  // LRU cache is self-managing, no TTL cleanup needed
-  
-  // Perform storage cache cleanup
-  performCacheCleanup();
+}
+
+// LRU cache is self-managing, no TTL cleanup needed
+
+// Perform storage cache cleanup
+performCacheCleanup();
   
   console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, storage caches cleaned via storage module`);
 }, 5 * 60 * 1000); // Run every 5 minutes instead of 10
