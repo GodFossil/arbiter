@@ -1,8 +1,9 @@
 // mongo.js
 const { MongoClient } = require("mongodb");
+const config = require('./config');
 
 const uri = process.env.MONGODB_URI;
-const client = new MongoClient(uri, { maxPoolSize: 10 });
+const client = new MongoClient(uri, { maxPoolSize: config.mongodb.maxPoolSize });
 
 let db = null;
 
@@ -39,10 +40,10 @@ async function createIndexes(db) {
       { name: "summarization_idx" }
     );
     
-    // TTL index for automatic cleanup of old messages (optional - 30 days)
+    // TTL index for automatic cleanup of old messages (configurable days)
     await collection.createIndex(
       { ts: 1 },
-      { expireAfterSeconds: 30 * 24 * 60 * 60, name: "ttl_cleanup" }
+      { expireAfterSeconds: config.mongodb.ttlCleanupDays * 24 * 60 * 60, name: "ttl_cleanup" }
     );
     
     console.log("[MONGO] Performance indexes created successfully");

@@ -1,6 +1,9 @@
 console.log("[STARTUP] Loading Arbiter bot...");
 require("dotenv").config();
 console.log("[STARTUP] Environment loaded");
+console.log("[STARTUP] Loading configuration...");
+const config = require('./config');
+console.log("[STARTUP] Configuration loaded and validated");
 const express = require("express");
 console.log("[STARTUP] Express loaded");
 console.log("[STARTUP] Loading Discord.js...");
@@ -35,7 +38,7 @@ const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS, USE_LOGICAL_PR
 console.log("[STARTUP] All modules loaded successfully");
 const app = express();
 
-const PORT = process.env.PORT || 3000;
+const PORT = config.server.port;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
 app.listen(PORT, () => console.log(`Keepalive server running on port ${PORT}`));
 
@@ -60,8 +63,8 @@ const client = new Client({
 });
 console.log("[DEBUG] Discord client created successfully");
 
-const ALLOWED_CHANNELS = process.env.ALLOWED_CHANNELS
-  ? process.env.ALLOWED_CHANNELS.split(',').map(s => s.trim()).filter(Boolean)
+const ALLOWED_CHANNELS = config.server.allowedChannels
+  ? config.server.allowedChannels.split(',').map(s => s.trim()).filter(Boolean)
   : [];
 function isBotActiveInChannel(msg) {
   const parentId = msg.channel.parentId;
@@ -76,8 +79,8 @@ function isBotActiveInChannel(msg) {
 // These constants are now defined in their respective modules
 
 // ---- DETECTION TOGGLE ----
-let DETECTION_ENABLED = true; // Global toggle for contradiction/misinformation detection
-let LOGICAL_PRINCIPLES_ENABLED = true; // Global toggle for logic.js reasoning framework
+let DETECTION_ENABLED = config.detection.enabled; // Global toggle for contradiction/misinformation detection
+let LOGICAL_PRINCIPLES_ENABLED = config.detection.logicalPrinciplesEnabled; // Global toggle for logic.js reasoning framework
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -145,7 +148,7 @@ function makeJumpButton(jumpUrl) {
 }
 
 let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
-const MAX_SOURCE_MAPPINGS = 500; // Prevent memory leaks
+const MAX_SOURCE_MAPPINGS = config.cache.maxSourceMappings; // Prevent memory leaks
 
 setInterval(async () => {
   const cutoff = Date.now() - 3600 * 1000; // 1 hour cutoff
@@ -208,7 +211,7 @@ if (latestSourcesByBotMsg.size > MAX_SOURCE_MAPPINGS) {
 performCacheCleanup();
   
   console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, storage caches cleaned via storage module`);
-}, 5 * 60 * 1000); // Run every 5 minutes instead of 10
+}, config.server.cleanupIntervalMinutes * 60 * 1000); // Configurable cleanup interval
 
 
 

@@ -6,10 +6,11 @@ const {
   fetchUserMessagesForDetection
 } = require("./storage");
 const { TRIVIAL_PATTERNS, isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
+const config = require('./config');
 
 // ---- TUNEABLE PARAMETERS ----
-const MAX_FACTCHECK_CHARS = 500;
-const USE_LOGICAL_PRINCIPLES = true; // TODO: Make this configurable for testing
+const MAX_FACTCHECK_CHARS = config.detection.maxFactcheckChars;
+const USE_LOGICAL_PRINCIPLES = config.detection.logicalPrinciplesEnabled;
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `

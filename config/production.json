@@ -1,0 +1,22 @@
+{
+  "server": {
+    "cleanupIntervalMinutes": 3
+  },
+  "cache": {
+    "maxSourceMappings": 1000,
+    "maxAnalysisCacheSize": 500,
+    "maxMessageCacheSize": 2000,
+    "maxValidationCacheSize": 1500
+  },
+  "storage": {
+    "maxContextMessagesPerChannel": 200
+  },
+  "mongodb": {
+    "maxPoolSize": 20,
+    "ttlCleanupDays": 60
+  },
+  "limits": {
+    "aiConcurrency": 5,
+    "exaConcurrency": 3
+  }
+}

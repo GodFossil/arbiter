@@ -1,0 +1,61 @@
+{
+  "server": {
+    "port": 3000,
+    "allowedChannels": null,
+    "cleanupIntervalMinutes": 5
+  },
+  "ai": {
+    "digitalOceanUrl": "https://inference.do-ai.run/v1/chat/completions",
+    "models": {
+      "userFacing": {
+        "primary": "openai-gpt-5",
+        "fallback": "anthropic-claude-3.7-sonnet",
+        "temperature": 0.8,
+        "maxTokens": 2048
+      },
+      "contradictionDetection": {
+        "primary": "openai-gpt-4o-mini",
+        "fallback": "llama3.3-70b-instruct",
+        "temperature": 0.3,
+        "maxTokens": 1024
+      },
+      "misinformationDetection": {
+        "primary": "openai-gpt-4o",
+        "fallback": "deepseek-r1-distill-llama-70b",
+        "temperature": 0.3,
+        "maxTokens": 1536
+      },
+      "summarization": {
+        "primary": "anthropic-claude-3.5-haiku",
+        "fallback": "mistral-nemo-instruct-2407",
+        "temperature": 0.5,
+        "maxTokens": 1024
+      }
+    }
+  },
+  "detection": {
+    "enabled": true,
+    "logicalPrinciplesEnabled": true,
+    "maxFactcheckChars": 500
+  },
+  "cache": {
+    "maxSourceMappings": 500,
+    "maxAnalysisCacheSize": 300,
+    "maxMessageCacheSize": 1000,
+    "maxValidationCacheSize": 1000,
+    "analysisCacheTtlMs": 60000
+  },
+  "storage": {
+    "maxContextMessagesPerChannel": 100,
+    "summaryBlockSize": 20,
+    "trivialHistoryThreshold": 0.8
+  },
+  "mongodb": {
+    "maxPoolSize": 10,
+    "ttlCleanupDays": 30
+  },
+  "limits": {
+    "aiConcurrency": 3,
+    "exaConcurrency": 2
+  }
+}

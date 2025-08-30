@@ -1,5 +1,6 @@
 const { connect, resetDatabase } = require("./mongo");
 const { isTrivialOrSafeMessage } = require("./filters");
+const config = require('./config');
 
 // ---- LRU CACHE IMPLEMENTATION ----
 class LRUCache {
@@ -67,16 +68,16 @@ class LRUCache {
 }
 
 // ---- CACHE INSTANCES ----
-const messageCache = new LRUCache(1000); // Cache up to 1000 different query results
+const messageCache = new LRUCache(config.cache.maxMessageCacheSize); // Cache up to configured number of query results
 const contentAnalysisCache = new Map(); // Cache content analysis results
 const contradictionValidationCache = new Map(); // Cache validation results
 
 // ---- STORAGE CONFIGURATION ----
-const ANALYSIS_CACHE_TTL_MS = 60000; // 1 minute TTL for analysis cache
-const MAX_CONTEXT_MESSAGES_PER_CHANNEL = 100;
-const SUMMARY_BLOCK_SIZE = 20;
-const TRIVIAL_HISTORY_THRESHOLD = 0.8; // 80% trivial = skip context LLM
-const MAX_ANALYSIS_CACHE_SIZE = 300; // Prevent memory leaks
+const ANALYSIS_CACHE_TTL_MS = config.cache.analysisCacheTtlMs; // TTL for analysis cache
+const MAX_CONTEXT_MESSAGES_PER_CHANNEL = config.storage.maxContextMessagesPerChannel;
+const SUMMARY_BLOCK_SIZE = config.storage.summaryBlockSize;
+const TRIVIAL_HISTORY_THRESHOLD = config.storage.trivialHistoryThreshold; // threshold for trivial messages
+const MAX_ANALYSIS_CACHE_SIZE = config.cache.maxAnalysisCacheSize; // Prevent memory leaks
 
 // ---- UTILITY FUNCTIONS ----
 function getDisplayName(msg) {
@@ -353,7 +354,7 @@ function performCacheCleanup() {
   }
   
   // Clean up validation cache when it grows too large
-  if (contradictionValidationCache.size > 1000) {
+  if (contradictionValidationCache.size > config.cache.maxValidationCacheSize) {
     console.log(`[DEBUG] Clearing validation cache (${contradictionValidationCache.size} entries)`);
     contradictionValidationCache.clear();
   }

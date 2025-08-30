@@ -1,4 +1,5 @@
 const axios = require("axios");
+const config = require('./config');
 
 // Environment constants
 const EXA_API_KEY = process.env.EXA_API_KEY;
@@ -18,12 +19,12 @@ async function initializeRateLimiting() {
   pLimit = (await import("p-limit")).default;
   
   // Initialize rate limiters
-  userFacingLimit = pLimit(3); // Max 3 concurrent user-facing replies (highest priority)
-  backgroundLimit = pLimit(2);  // Max 2 concurrent background detections (medium priority) 
+  userFacingLimit = pLimit(config.limits.aiConcurrency); // Max concurrent user-facing replies (highest priority)
+  backgroundLimit = pLimit(config.limits.aiConcurrency);  // Max concurrent background detections (medium priority) 
   summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
-  factCheckLimit = pLimit(2);   // Max 2 concurrent fact-checks (medium priority)
+  factCheckLimit = pLimit(config.limits.exaConcurrency);   // Max concurrent fact-checks (medium priority)
   
-  console.log("[RATE LIMIT] AI call limits configured - UserFacing: 3, Background: 2, Summary: 1, FactCheck: 2");
+  console.log(`[RATE LIMIT] AI call limits configured - UserFacing: ${config.limits.aiConcurrency}, Background: ${config.limits.aiConcurrency}, Summary: 1, FactCheck: ${config.limits.exaConcurrency}`);
 }
 
 // ---- CIRCUIT BREAKER IMPLEMENTATION ----
