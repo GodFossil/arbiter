@@ -3,7 +3,7 @@ const { isTrivialOrSafeMessage } = require("../../filters");
 const { replyWithSourcesButton } = require("../ui/components");
 const { truncateMessage, getDisplayName } = require("../ui/formatting");
 const { aiUserFacing } = require("../../ai");
-const { exaSearch, cleanUrl } = require("../../ai-utils");
+const { exaSearch, exaAnswer, cleanUrl } = require("../../ai-utils");
 const { getLogicalContext } = require("../../logic");
 
 /**
@@ -26,13 +26,17 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     // Fetch conversation context
     const context = await fetchConversationContext(msg, client, thisMsgId);
     if (!context) {
+      try {
       await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
+    } catch {}
       return;
     }
     
     // Check if conversation is mostly trivial
     if (isConversationTrivial(context)) {
-      await msg.reply("Little of substance has been spoken here so far.");
+      try {
+        await msg.reply("Little of substance has been spoken here so far.");
+      } catch {}
       return;
     }
     
@@ -46,9 +50,23 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     const { result, modelUsed } = await aiUserFacing(prompt);
     console.log(`[AI] User-facing reply generated using ${modelUsed}`);
     
+    // ==== Source-gathering logic for non-news answers ====
+    let allSources = [...(newsData.sources || [])];
+    if (allSources.length === 0) {
+      try {
+        console.log(`[DEBUG] No news sources found, trying exaAnswer for general sources`);
+        const exaRes = await exaAnswer(msg.content);
+        if (exaRes && exaRes.urls && exaRes.urls.length) {
+          allSources = exaRes.urls;
+          console.log(`[DEBUG] Found ${allSources.length} sources via exaAnswer`);
+        }
+      } catch (e) {
+        console.warn("[DEBUG] exaAnswer failed:", e.message);
+      }
+    }
+    
     // Prepare final reply with detection integration
     const finalReply = integrateDetectionIntoReply(result, detectionResults, state);
-    let allSources = [...(newsData.sources || [])];
     
     // Add detection sources if available
     if (detectionResults && state.DETECTION_ENABLED) {
@@ -62,6 +80,8 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
       .map(u => cleanUrl(u))
       .filter(u => typeof u === "string" && u.startsWith("http")))];
     
+    console.log('[DEBUG] filteredSources:', filteredSources);
+    
     // Send reply with appropriate buttons
     if (filteredSources.length > 0) {
       await replyWithSourcesButton(msg, { content: truncateMessage(finalReply) }, filteredSources);
@@ -72,11 +92,11 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     // Save bot reply to storage
     await saveBotReply(msg, finalReply, client.user);
     
-  } catch (e) {
-    console.error("User-facing reply failed:", e);
+  } catch (err) {
     try {
-      await msg.reply("I cannot parse this realm's discourse at the moment.");
+      await msg.reply("Nobody will help you.");
     } catch {}
+    console.error("AI user-facing failed:", err);
   }
 }
 
@@ -94,7 +114,11 @@ async function fetchConversationContext(msg, client, thisMsgId = null) {
     console.log(`[DEBUG] User history fetched: ${userHistoryArr?.length || 0} messages`);
   } catch (e) {
     console.error(`[DEBUG] User history fetch failed:`, e);
-    return null;
+    userHistoryArr = null;
+    try { 
+      await msg.reply("The past refuses to reveal itself."); 
+      return null; 
+    } catch {}
   }
   
   console.log(`[DEBUG] Fetching channel history...`);
@@ -106,7 +130,11 @@ async function fetchConversationContext(msg, client, thisMsgId = null) {
     console.log(`[DEBUG] Channel history fetched: ${channelHistoryArr?.length || 0} messages`);
   } catch (e) {
     console.error(`[DEBUG] Channel history fetch failed:`, e);
-    return null;
+    channelHistoryArr = null;
+    try { 
+      await msg.reply("All context is lost to the ether."); 
+      return null; 
+    } catch {}
   }
   
   if (!userHistoryArr || !channelHistoryArr) {
@@ -220,7 +248,7 @@ function buildDetectionContext(detectionResults) {
 }
 
 /**
- * Integrate detection results into AI-generated reply
+ * Integrate detection results into AI-generated reply (matches original behavior)
  */
 function integrateDetectionIntoReply(aiReply, detectionResults, state) {
   if (!detectionResults || !state.DETECTION_ENABLED) {
@@ -230,17 +258,27 @@ function integrateDetectionIntoReply(aiReply, detectionResults, state) {
   const hasContradiction = detectionResults.contradiction && detectionResults.contradiction.contradiction === "yes";
   const hasMisinformation = detectionResults.misinformation && detectionResults.misinformation.misinformation === "yes";
   
-  let detectionSuffix = "";
-  
-  if (hasContradiction && hasMisinformation) {
-    detectionSuffix = `\n\n⚠️ **Note:** I've detected both a logical contradiction and misinformation in your message. See my separate analysis above.`;
-  } else if (hasContradiction) {
-    detectionSuffix = `\n\n⚠️ **Note:** I've detected a logical contradiction in your message. See my analysis above.`;
-  } else if (hasMisinformation) {
-    detectionSuffix = `\n\n🚨 **Note:** I've detected misinformation in your message. See my fact-check above.`;
+  if (!hasContradiction && !hasMisinformation) {
+    return aiReply;
   }
   
-  return aiReply + detectionSuffix;
+  console.log(`[DEBUG] Combining detection results with user-facing reply`);
+  
+  let detectionSection = "\n\n---\n";
+  
+  if (hasContradiction && hasMisinformation) {
+    detectionSection += `⚡🚩 **CONTRADICTION & MISINFORMATION DETECTED** 🚩⚡\n\n`;
+    detectionSection += `**CONTRADICTION:** ${detectionResults.contradiction.reason}\n`;
+    detectionSection += `**MISINFORMATION:** ${detectionResults.misinformation.reason}`;
+  } else if (hasContradiction) {
+    detectionSection += `⚡ **CONTRADICTION DETECTED** ⚡\n`;
+    detectionSection += `${detectionResults.contradiction.reason}`;
+  } else if (hasMisinformation) {
+    detectionSection += `🚩 **MISINFORMATION DETECTED** 🚩\n`;
+    detectionSection += `${detectionResults.misinformation.reason}`;
+  }
+  
+  return aiReply + detectionSection;
 }
 
 /**

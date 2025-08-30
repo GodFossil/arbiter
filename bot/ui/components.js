@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require("discord.js");
 const config = require('../../config');
 
 // ---- SOURCE BUTTON MANAGEMENT ----
@@ -68,19 +68,27 @@ async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap = nu
 async function handleSourceButtonInteraction(interaction) {
   const buttonId = interaction.customId.split(':')[1];
   let sources = latestSourcesByBotMsg.get(buttonId) || latestSourcesByBotMsg.get(interaction.message.id);
-  
-  if (!sources || !sources.urls || sources.urls.length === 0) {
-    await interaction.reply({
-      content: "❌ **Sources unavailable** (may have expired)",
-      ephemeral: true
+
+  if (!sources) {
+    await interaction.reply({ 
+      content: "No source information found for this message.", 
+      flags: MessageFlags.Ephemeral 
     });
     return;
   }
   
-  const sourceList = sources.urls.map((url, i) => `**${i + 1}.** ${url}`).join('\n');
-  await interaction.reply({
-    content: `📚 **Sources:**\n${sourceList}`,
-    ephemeral: true
+  if (!sources.urls || !sources.urls.length) {
+    await interaction.reply({ 
+      content: "No URLs were referenced in this response.", 
+      flags: MessageFlags.Ephemeral 
+    });
+    return;
+  }
+  
+  const resp = `**Sources referenced:**\n` + sources.urls.map(u => `<${u}>`).join('\n');
+  await interaction.reply({ 
+    content: resp, 
+    flags: MessageFlags.Ephemeral 
   });
 }
 
