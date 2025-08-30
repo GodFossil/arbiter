@@ -41,6 +41,20 @@ async function createIndexes(db) {
     );
     
     // TTL index for automatic cleanup of old messages (configurable days)
+    // Drop existing TTL index if it exists with different expiration
+    try {
+      const existingIndexes = await collection.indexes();
+      const ttlIndex = existingIndexes.find(idx => idx.name === "ttl_cleanup");
+      const newTTL = config.mongodb.ttlCleanupDays * 24 * 60 * 60;
+      
+      if (ttlIndex && ttlIndex.expireAfterSeconds !== newTTL) {
+        console.log(`[MONGO] Dropping existing TTL index (${ttlIndex.expireAfterSeconds}s) to recreate with new value (${newTTL}s)`);
+        await collection.dropIndex("ttl_cleanup");
+      }
+    } catch (e) {
+      // Index might not exist, continue
+    }
+    
     await collection.createIndex(
       { ts: 1 },
       { expireAfterSeconds: config.mongodb.ttlCleanupDays * 24 * 60 * 60, name: "ttl_cleanup" }
