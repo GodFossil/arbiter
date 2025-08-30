@@ -4,901 +4,117 @@ console.log("[STARTUP] Environment loaded");
 console.log("[STARTUP] Loading configuration...");
 const config = require('./config');
 console.log("[STARTUP] Configuration loaded and validated");
-const express = require("express");
-console.log("[STARTUP] Express loaded");
-console.log("[STARTUP] Loading Discord.js...");
-const { Client, GatewayIntentBits, Partials, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionType, MessageFlags } = require("discord.js");
-console.log("[STARTUP] Loading AI module...");
-const { aiUserFacing, aiSummarization } = require("./ai");
-console.log("[STARTUP] Loading logic module...");
-const { getSpecificPrinciple, getLogicalContext } = require("./logic");
-console.log("[STARTUP] Loading filters module...");
-const { isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
-console.log("[STARTUP] Loading storage module...");
-const {
-  saveUserMessage,
-  saveBotReply,
-  fetchUserHistory,
-  fetchChannelHistory,
-  getCacheStatus,
-  performCacheCleanup,
-  resetAllData
-} = require("./storage");
-console.log("[STARTUP] Loading AI utils module...");
-const { 
-  initializeAIUtils, 
-  exaAnswer, 
-  exaSearch, 
-  cleanUrl,
-  getCircuitBreakers,
-  getRateLimiters
-} = require("./ai-utils");
-console.log("[STARTUP] Loading detection module...");
-const { detectContradictionOrMisinformation, MAX_FACTCHECK_CHARS, USE_LOGICAL_PRINCIPLES } = require("./detection");
-console.log("[STARTUP] All modules loaded successfully");
-const app = express();
 
+// ---- MODULE IMPORTS ----
+const express = require("express");
+const { createDiscordClient } = require("./bot/core/client");
+const botState = require("./bot/core/state");
+const { handleMessageCreate } = require("./bot/events/messageCreate");
+const { handleInteractionCreate } = require("./bot/events/interactionCreate");
+const { cleanupSourceMappings } = require("./bot/ui/components");
+const { performCacheCleanup } = require("./storage");
+const { initializeAIUtils } = require("./ai-utils");
+
+console.log("[STARTUP] All modules loaded successfully");
+
+// ---- KEEPALIVE SERVER ----
+const app = express();
 const PORT = config.server.port;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
 app.listen(PORT, () => console.log(`Keepalive server running on port ${PORT}`));
 
-console.log("[DEBUG] Creating Discord client with intents...");
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessageTyping
-  ],
-  partials: [
-    Partials.Message,
-    Partials.Channel,
-    Partials.Reaction,
-    Partials.GuildMember,
-    Partials.User,
-    Partials.ThreadMember
-  ]
-});
-console.log("[DEBUG] Discord client created successfully");
+// ---- DISCORD CLIENT SETUP ----
+const client = createDiscordClient();
 
-const ALLOWED_CHANNELS = config.server.allowedChannels
-  ? config.server.allowedChannels.split(',').map(s => s.trim()).filter(Boolean)
-  : [];
-function isBotActiveInChannel(msg) {
-  const parentId = msg.channel.parentId;
-  if (ALLOWED_CHANNELS.length === 0) return true;
-  if (ALLOWED_CHANNELS.includes(msg.channel.id)) return true;
-  if (parentId && ALLOWED_CHANNELS.includes(parentId)) return true;
-  return false;
-}
-
-
-
-// These constants are now defined in their respective modules
-
-// ---- DETECTION TOGGLE ----
-let DETECTION_ENABLED = config.detection.enabled; // Global toggle for contradiction/misinformation detection
-let LOGICAL_PRINCIPLES_ENABLED = config.detection.logicalPrinciplesEnabled; // Global toggle for logic.js reasoning framework
-
-// ---- PERSONALITY INJECTION ----
-const SYSTEM_INSTRUCTIONS = `
-You are the invaluable assistant of our Discord debate server. The server is called The Debate Server and it is a community full of brilliant interlocutors. You are to assist us by providing logical analyses and insights. You are to prioritize truth over appeasing others. You will hold no reservations in declaring a user valid or incorrect, provided that you determine either to be the case to the best of your ability. Your personality is calm, direct, bold, stoic, and wise. You are a master of mindfulness and all things philosophy. You are humble. You will answer prompts succinctly, directly, and in as few words as necessary. You will know that brevity is the soul of wit and wisdom. Your name is Arbiter, you may refer to yourself as The Arbiter.
-- Avoid generic or diplomatic statements. If the facts or arguments warrant a judgment or correction, state it directly. Use decisive, unambiguous language whenever you issue an opinion or summary.
-- Never apologize on behalf of others or yourself unless a factual error was made and corrected.
-- If there is true ambiguity, say "uncertain," "no clear winner," or "evidence not provided"—NOT "it depends" or "both sides have a point."
-- Default tone is realistic and direct, not conciliatory.
-- Never use language principally for placation, comfort, or encouragement. Use language for accuracy, and also quips.
-`.trim();
-
-// ---- UTILITIES ----
-async function replyWithSourcesButton(msg, replyOptions, sources, sourceMap) {
-  // Generate a unique ID for this button interaction
-  const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
-  
-  const replyMsg = await msg.reply({
-    ...replyOptions,
-    components: [makeSourcesButton(sources, uniqueId)]
-  });
-  
-  // Map both the unique ID and the Discord message ID to the sources
-  sourceMap.set(uniqueId, { urls: sources, timestamp: Date.now() });
-  sourceMap.set(replyMsg.id, { urls: sources, timestamp: Date.now() });
-  
-  return replyMsg;
-}
-// cleanUrl is now imported from ai-utils.js
-
-function truncateMessage(content, maxLength = 1950) {
-  if (!content || content.length <= maxLength) return content;
-  
-  // Try to truncate at word boundary
-  const truncated = content.slice(0, maxLength);
-  const lastSpace = truncated.lastIndexOf(' ');
-  const cutPoint = lastSpace > maxLength * 0.8 ? lastSpace : maxLength;
-  
-  return content.slice(0, cutPoint) + '... [truncated]';
-}
-
-
-
-
-
-// Button logic  
-const SOURCE_BUTTON_ID = "arbiter-show-sources";
-
-function makeSourcesButton(sourceArray, msgId) {
-  return new ActionRowBuilder().addComponents([
-    new ButtonBuilder()
-      .setCustomId(`${SOURCE_BUTTON_ID}:${msgId}`)
-      .setLabel('\u{1D48A}')
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(!sourceArray || sourceArray.length === 0)
-  ]);
-}
-
-function makeJumpButton(jumpUrl) {
-  return new ActionRowBuilder().addComponents([
-    new ButtonBuilder()
-      .setURL(jumpUrl)
-      .setStyle(ButtonStyle.Link)
-      .setEmoji('🔗')
-  ]);
-}
-
-let latestSourcesByBotMsg = new Map(); // msgId -> { urls, timestamp }
-const MAX_SOURCE_MAPPINGS = config.cache.maxSourceMappings; // Prevent memory leaks
-
+// ---- PERIODIC CLEANUP ----
 setInterval(async () => {
-  const cutoff = Date.now() - 3600 * 1000; // 1 hour cutoff
-  const expiredEntries = [];
+  // Clean up source mappings and disable expired buttons
+  await cleanupSourceMappings(client);
   
-  // Clean up source button mappings
-  for (const [id, obj] of latestSourcesByBotMsg.entries()) {
-    if (obj.timestamp < cutoff) {
-      expiredEntries.push(id);
-    }
-  }
+  // Perform storage cache cleanup
+  performCacheCleanup();
   
-  // Disable buttons for expired Discord message IDs (not unique button IDs)
-  for (const id of expiredEntries) {
-    // Discord message IDs are snowflakes (17-19 digits), our unique IDs contain dashes
-    if (/^\d{17,19}$/.test(id)) {
-      try {
-        // Try to find the message across all cached channels
-        let foundMessage = null;
-        for (const [_, channel] of client.channels.cache) {
-          if (channel.messages) {
-            try {
-              foundMessage = await channel.messages.fetch(id);
-              if (foundMessage) break;
-            } catch (e) {
-              // Message not in this channel, continue searching
-              continue;
-            }
-          }
-        }
-        
-        if (foundMessage && foundMessage.components && foundMessage.components.length > 0) {
-          // Remove the button completely by setting components to empty array
-          await foundMessage.edit({ components: [] });
-        }
-      } catch (e) {
-        // Message might be deleted or bot lacks permissions - silently continue
-        console.warn(`Failed to disable button for message ${id}:`, e.message);
-      }
-    }
-    
-    // Remove from map regardless of button disable success
-    latestSourcesByBotMsg.delete(id);
-}
+  console.log(`[DEBUG] Periodic cleanup completed`);
+}, config.server.cleanupIntervalMinutes * 60 * 1000);
 
-// Enforce size limit on source mappings to prevent memory leaks
-if (latestSourcesByBotMsg.size > MAX_SOURCE_MAPPINGS) {
-  console.log(`[DEBUG] Source mappings cache too large (${latestSourcesByBotMsg.size}), removing oldest entries`);
-  const entries = Array.from(latestSourcesByBotMsg.entries());
-  entries.sort((a, b) => a[1].timestamp - b[1].timestamp); // Sort by timestamp
-  const toRemove = Math.floor(MAX_SOURCE_MAPPINGS * 0.2); // Remove 20% of entries
-  for (let i = 0; i < toRemove; i++) {
-    latestSourcesByBotMsg.delete(entries[i][0]);
-  }
-}
-
-// LRU cache is self-managing, no TTL cleanup needed
-
-// Perform storage cache cleanup
-performCacheCleanup();
-  
-  console.log(`[DEBUG] Cache cleanup: sources=${latestSourcesByBotMsg.size}, storage caches cleaned via storage module`);
-}, config.server.cleanupIntervalMinutes * 60 * 1000); // Configurable cleanup interval
-
-
-
-// ---- ADMIN: FULL RESET ----
-async function handleAdminCommands(msg) {
-  console.log(`[DEBUG] Admin command check: "${msg.content}" from user ${msg.author.id}`);
-  
-  if (!msg.guild) {
-    console.log("[DEBUG] No guild found - not a server message");
-    return false;
-  }
-  
-  const ownerId = msg.guild.ownerId || (await msg.guild.fetchOwner()).id;
-  console.log(`[DEBUG] Guild owner: ${ownerId}, Message author: ${msg.author.id}`);
-  
-  if (msg.author.id !== ownerId) {
-    console.log("[DEBUG] User is not guild owner - admin command denied");
-    return false;
-  }
-  
-  if (msg.content === "!arbiter_reset_all") {
-    console.log("[DEBUG] Reset command matched - executing database reset");
-    try {
-      // Completely reset the database structure and all storage caches
-      await resetAllData();
-      
-      // Clear remaining local caches
-      latestSourcesByBotMsg.clear();
-      
-      console.log("[ADMIN] Complete database and memory reset performed by guild owner");
-      await msg.reply("🗑️ **COMPLETE SYSTEM RESET PERFORMED**\n\n• MongoDB database completely dropped and recreated\n• All collections, indexes, and artifacts removed\n• Fresh database structure initialized\n• All in-memory caches cleared\n• Arbiter reset to pristine state");
-      return true;
-    } catch (e) {
-      console.warn("[MODLOG] Failed to reset database structure.", e);
-      await msg.reply("The void resists complete reformation. Database structure may be partially reset.");
-      return true;
-    }
-  }
-  if (msg.content.startsWith("!arbiter_analyze ")) {
-    try {
-      const textToAnalyze = msg.content.replace("!arbiter_analyze ", "").trim();
-      const analysis = analyzeLogicalContent(textToAnalyze);
-      await msg.reply(
-        `🧠 **Logical Analysis**\n` +
-        `**Content:** "${textToAnalyze}"\n\n` +
-        `**Analysis:**\n` +
-        `• Uncertainty markers: ${analysis.hasUncertainty ? '✅' : '❌'}\n` +
-        `• Temporal qualifiers: ${analysis.hasTemporal ? '✅' : '❌'}\n` +
-        `• Absolute claims: ${analysis.hasAbsolutes ? '✅' : '❌'}\n` +
-        `• Evidence indicators: ${analysis.hasEvidence ? '✅' : '❌'}\n` +
-        `• Substantiveness score: ${analysis.substantiveness.toFixed(2)}\n\n` +
-        (analysis.recommendations.length > 0 ? 
-          `**Recommendations:**\n${analysis.recommendations.map(r => `• ${r}`).join('\n')}` : 
-          `**No specific recommendations**`)
-      );
-      return true;
-    } catch (e) {
-      console.warn("[MODLOG] Failed to analyze content.", e);
-      await msg.reply("Analysis proves elusive.");
-      return true;
-    }
-  }
-  if (msg.content.startsWith("!arbiter_principle ")) {
-    try {
-      const principleName = msg.content.replace("!arbiter_principle ", "").trim();
-      const principle = getSpecificPrinciple(principleName);
-      
-      if (!principle) {
-        await msg.reply(`📚 **Available Principles:**\nnonContradiction, excludedMiddle, identity\n\nUsage: \`!arbiter_principle nonContradiction\``);
-        return true;
-      }
-      
-      await msg.reply(
-        `📜 **${principle.name}**\n\n` +
-        `**Principle:** ${principle.principle}\n\n` +
-        `**Application:** ${principle.application}\n\n` +
-        `**Examples:**\n${principle.examples.map(ex => `• ${ex}`).join('\n')}`
-      );
-      return true;
-    } catch (e) {
-      console.warn("[MODLOG] Failed to get principle.", e);
-      await msg.reply("Wisdom remains hidden.");
-      return true;
-    }
-  }
-  
-  if (msg.content === "!arbiter_status") {
-    try {
-      const { aiCircuitBreaker, exaCircuitBreaker } = getCircuitBreakers();
-      const aiStatus = aiCircuitBreaker.getStatus();
-      const exaStatus = exaCircuitBreaker.getStatus();
-      const storageCacheStatus = getCacheStatus();
-      
-      await msg.reply(
-        `⚡ **SYSTEM STATUS** ⚡\n\n` +
-        `**Detection System:**\n` +
-        `• Contradiction/Misinformation Detection: ${DETECTION_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n` +
-        `• Logical Principles Framework: ${LOGICAL_PRINCIPLES_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n\n` +
-        `**DigitalOcean AI Circuit Breaker:**\n` +
-        `• State: ${aiStatus.state}\n` +
-        `• Failures: ${aiStatus.failureCount}\n` +
-        `• Last Failure: ${aiStatus.lastFailureTime ? new Date(aiStatus.lastFailureTime).toLocaleString() : 'None'}\n\n` +
-        `**Exa API Circuit Breaker:**\n` +
-        `• State: ${exaStatus.state}\n` +
-        `• Failures: ${exaStatus.failureCount}\n` +
-        `• Last Failure: ${exaStatus.lastFailureTime ? new Date(exaStatus.lastFailureTime).toLocaleString() : 'None'}\n\n` +
-        `**Cache Status:**\n` +
-        `• Message Cache: ${storageCacheStatus.messageCache} entries\n` +
-        `• Analysis Cache: ${storageCacheStatus.contentAnalysisCache} entries\n` +
-        `• Validation Cache: ${storageCacheStatus.contradictionValidationCache} entries`
-      );
-      return true;
-    } catch (e) {
-      console.warn("[MODLOG] Failed to get system status.", e);
-      await msg.reply("Status inquiry proves elusive.");
-      return true;
-    }
-  }
-  
-  if (msg.content === "!arbiter_toggle_detection") {
-    try {
-      DETECTION_ENABLED = !DETECTION_ENABLED;
-      const status = DETECTION_ENABLED ? 'ENABLED' : 'DISABLED';
-      const emoji = DETECTION_ENABLED ? '✅' : '❌';
-      
-      console.log(`[ADMIN] Detection toggled ${status} by guild owner`);
-      
-      await msg.reply(
-        `🔧 **DETECTION SYSTEM TOGGLED** 🔧\n\n` +
-        `${emoji} **Contradiction/Misinformation Detection: ${status}**\n\n` +
-        `${DETECTION_ENABLED ? 
-          '• Bot will now actively detect contradictions and misinformation\n• Messages will be analyzed for logical inconsistencies\n• Fact-checking will be performed against web sources' : 
-          '• Bot will NOT detect contradictions or misinformation\n• Messages will still be stored for context and summaries\n• User-facing replies will continue to work normally'}`
-      );
-      return true;
-    } catch (e) {
-      console.warn("[MODLOG] Failed to toggle detection.", e);
-      await msg.reply("The toggle resists manipulation.");
-      return true;
-    }
-  }
-  
-  if (msg.content === "!arbiter_toggle_logic") {
-    try {
-      LOGICAL_PRINCIPLES_ENABLED = !LOGICAL_PRINCIPLES_ENABLED;
-      const status = LOGICAL_PRINCIPLES_ENABLED ? 'ENABLED' : 'DISABLED';
-      const emoji = LOGICAL_PRINCIPLES_ENABLED ? '✅' : '❌';
-      
-      console.log(`[ADMIN] Logical principles toggled ${status} by guild owner`);
-      
-      await msg.reply(
-        `🧠 **LOGICAL PRINCIPLES TOGGLED** 🧠\n\n` +
-        `${emoji} **Logical Reasoning Framework: ${status}**\n\n` +
-        `${LOGICAL_PRINCIPLES_ENABLED ? 
-          '• AI will use advanced logical principles for reasoning\n• Enhanced contradiction detection with semantic validation\n• Fallacy detection and evidence hierarchy applied\n• Context-aware reasoning guidelines active' : 
-          '• AI will use basic reasoning without enhanced framework\n• Standard contradiction detection only\n• No advanced logical principle injection\n• Faster processing but less sophisticated analysis'}`
-      );
-      return true;
-    } catch (e) {
-      console.warn("[MODLOG] Failed to toggle logical principles.", e);
-      await msg.reply("Logic itself resists alteration.");
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// AI utility functions are now imported from ai-utils.js
-
-// ------ DISCORD BOT EVENT HANDLER ------
-console.log("[DEBUG] Setting up Discord client event handlers...");
+// ---- EVENT HANDLERS ----
 
 client.once("ready", async () => {
   console.log(`[READY] Logged in as ${client.user.tag}!`);
-  console.log(`[READY] Bot ID: ${client.user.id}`);
-  console.log(`[DEBUG] Bot ready. Required env vars check:`);
-  console.log(`- DISCORD_TOKEN: ${process.env.DISCORD_TOKEN ? 'SET' : 'MISSING'}`);
-  console.log(`- DO_AI_API_KEY: ${process.env.DO_AI_API_KEY ? 'SET' : 'MISSING'}`);
-  console.log(`- MONGODB_URI: ${process.env.MONGODB_URI ? 'SET' : 'MISSING'}`);
-  console.log(`- EXA_API_KEY: ${process.env.EXA_API_KEY ? 'SET' : 'MISSING'}`);
+  console.log(`[READY] Serving ${client.guilds.cache.size} guilds with ${client.users.cache.size} users`);
   
-  // Initialize AI utilities (rate limiting and circuit breakers)
+  // Initialize AI utilities with rate limiting
   try {
     await initializeAIUtils();
     console.log("[READY] AI utilities initialized successfully");
-  } catch (error) {
-    console.error("[ERROR] Failed to initialize AI utilities:", error);
-    process.exit(1);
+  } catch (e) {
+    console.error("[READY] Failed to initialize AI utilities:", e);
   }
-  
-  console.log("[READY] Bot is fully ready to receive messages!");
-  console.log(`[DEBUG] Bot intents: ${client.options.intents}`);
-  console.log(`[DEBUG] Bot in ${client.guilds.cache.size} guilds`);
 });
 
+client.on("messageCreate", async (msg) => {
+  try {
+    await handleMessageCreate(msg, client, botState);
+  } catch (e) {
+    console.error("[ERROR] Message handling failed:", e);
+  }
+});
+
+client.on("interactionCreate", async (interaction) => {
+  try {
+    await handleInteractionCreate(interaction);
+  } catch (e) {
+    console.error("[ERROR] Interaction handling failed:", e);
+  }
+});
+
+// ---- ERROR HANDLING ----
 client.on("error", error => {
-  console.error("[DISCORD ERROR]", error);
+  console.error("[DISCORD] Client error:", error);
 });
 
 client.on("warn", warning => {
-  console.warn("[DISCORD WARN]", warning);
+  console.warn("[DISCORD] Client warning:", warning);
 });
 
 client.on("debug", info => {
-  if (info.includes("Connecting to gateway") || info.includes("Identifying") || info.includes("Ready") || info.includes("Session")) {
-    console.log("[DISCORD DEBUG]", info);
-  }
+  console.log("[DISCORD] Debug info:", info);
 });
 
-client.on("shardError", error => {
-  console.error("[DISCORD SHARD ERROR]", error);
+client.on("shardError", (error, shardId) => {
+  console.error(`[DISCORD] Shard ${shardId} error:`, error);
 });
 
-client.on("shardReconnecting", () => {
-  console.log("[DISCORD] Shard reconnecting...");
+client.on("shardReady", (shardId, unavailableGuilds) => {
+  console.log(`[DISCORD] Shard ${shardId} ready. Unavailable guilds: ${unavailableGuilds?.size || 0}`);
 });
 
-client.on("shardDisconnect", () => {
-  console.log("[DISCORD] Shard disconnected");
+client.on("shardDisconnect", (closeEvent, shardId) => {
+  console.warn(`[DISCORD] Shard ${shardId} disconnected:`, closeEvent);
 });
 
-client.on('interactionCreate', async interaction => {
-  if (interaction.type !== InteractionType.MessageComponent) return;
-  
-  // Handle source buttons
-  if (interaction.customId.startsWith(SOURCE_BUTTON_ID)) {
-    const buttonId = interaction.customId.split(':')[1];
-    let sources = latestSourcesByBotMsg.get(buttonId) || latestSourcesByBotMsg.get(interaction.message.id);
-
-    if (!sources) {
-      await interaction.reply({ content: "No source information found for this message.", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    if (!sources.urls || !sources.urls.length) {
-      await interaction.reply({ content: "No URLs were referenced in this response.", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    const resp = `**Sources referenced:**\n` + sources.urls.map(u => `<${u}>`).join('\n');
-    await interaction.reply({ content: resp, flags: MessageFlags.Ephemeral });
-    return;
-  }
-  
-
+client.on("shardReconnecting", shardId => {
+  console.log(`[DISCORD] Shard ${shardId} reconnecting...`);
 });
 
-console.log("[STARTUP] Setting up messageCreate event handler...");
-
-client.on("messageCreate", async (msg) => {
-  console.log(`[DEBUG] Message received: "${msg.content}" from ${msg.author.username} (bot: ${msg.author.bot})`);
-  
-  // Filter for allowed channel types and whitelisted channels (text, thread, forum)
-  if (msg.author.bot) {
-    console.log(`[DEBUG] Ignoring bot message`);
-    return;
-  }
-  
-  if (!(
-    msg.channel.type === ChannelType.GuildText ||
-    msg.channel.type === ChannelType.PublicThread ||
-    msg.channel.type === ChannelType.PrivateThread ||
-    msg.channel.type === ChannelType.AnnouncementThread ||
-    msg.channel.type === ChannelType.GuildForum
-  )) {
-    console.log(`[DEBUG] Ignoring message from unsupported channel type: ${msg.channel.type}`);
-    return;
-  }
-  
-  if (!isBotActiveInChannel(msg)) {
-    console.log(`[DEBUG] Bot not active in this channel`);
-    return;
-  }
-
-  console.log(`[DEBUG] Message passed initial filters, checking admin commands`);
-
-  // Handle admin commands FIRST (before any filtering)
-  const handled = await handleAdminCommands(msg);
-  if (handled) {
-    console.log(`[DEBUG] Admin command handled`);
-    return;
-  }
-
-  console.log(`[DEBUG] Checking for trivial/bot commands`);
-  
-  // Ignore trivial content or known other bot commands
-  if (isOtherBotCommand(msg.content)) {
-    console.log(`[DEBUG] Ignoring other bot command: ${msg.content}`);
-    return;
-  }
-  
-  if (isTrivialOrSafeMessage(msg.content)) {
-    console.log(`[DEBUG] Ignoring trivial message: ${msg.content}`);
-    return;
-  }
-
-  console.log(`[DEBUG] Message passed all filters, proceeding with processing`);
-
-    // Store the message!
-  let thisMsgId = null;
-  try {
-    thisMsgId = await saveUserMessage(msg, aiSummarization, SYSTEM_INSTRUCTIONS);
-  } catch (e) {
-    console.warn("DB store/prune error:", e);
-  }
-
-  const isMentioned = msg.mentions.has(client.user);
-  console.log(`[DEBUG] Bot mentioned: ${isMentioned}`);
-  let isReplyToBot = false;
-  let repliedToMsg = null;
-  if (msg.reference && msg.reference.messageId) {
-    try {
-      repliedToMsg = await msg.channel.messages.fetch(msg.reference.messageId);
-      if (repliedToMsg.author.id === client.user.id) {
-        isReplyToBot = true;
-        console.log(`[DEBUG] Reply to bot detected`);
-      }
-    } catch (e) {
-      repliedToMsg = null;
-      console.warn("Failed to fetch replied-to message:", e);
-    }
-  }
-
-  // ============ BACKGROUND DETECTION =============
-  // Check if detection is enabled globally and store results for potential use in user-facing replies
-  console.log(`[DEBUG] Detection enabled status: ${DETECTION_ENABLED}`);
-  let detectionResults = null;
-  
-  if (!DETECTION_ENABLED) {
-    console.log(`[DEBUG] Detection disabled globally - skipping background detection`);
-  } else {
-    // Intelligent pre-filtering to avoid unnecessary API calls
-    const shouldRunDetection = msg.content.length <= MAX_FACTCHECK_CHARS && 
-      !isTrivialOrSafeMessage(msg.content) && 
-      !isOtherBotCommand(msg.content) &&
-      msg.content.length > 8; // Minimum substantive length
-    
-    if (shouldRunDetection) {
-      console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
-      try {
-        detectionResults = await detectContradictionOrMisinformation(msg, LOGICAL_PRINCIPLES_ENABLED);
-        console.log(`[DEBUG] Detection result:`, detectionResults);
-      } catch (e) {
-        console.warn("Detection failure (silent to user):", e);
-      }
-      
-      // Only send immediate detection alerts if user is NOT mentioning/replying to bot
-      const isUserFacingTrigger = isMentioned || isReplyToBot;
-      console.log(`[DEBUG] User-facing trigger: ${isUserFacingTrigger}, will ${isUserFacingTrigger ? 'defer' : 'send'} detection alerts`);
-      
-      if (detectionResults && !isUserFacingTrigger) {
-        const hasContradiction = detectionResults.contradiction && detectionResults.contradiction.contradiction === "yes";
-        const hasMisinformation = detectionResults.misinformation && detectionResults.misinformation.misinformation === "yes";
-        
-        // Handle combined detection or individual detection
-        if (hasContradiction && hasMisinformation) {
-          // BOTH detected - combine into single message
-          const combinedReply = 
-            `⚡🚩 **CONTRADICTION & MISINFORMATION DETECTED** 🚩⚡\n\n` +
-            `**CONTRADICTION FOUND:**\n` +
-            `-# \`\`\`${detectionResults.contradiction.evidence}\`\`\`\n` +
-            `-# \`\`\`${detectionResults.contradiction.contradicting || msg.content}\`\`\`\n` +
-            `${detectionResults.contradiction.reason}\n\n` +
-            `**MISINFORMATION FOUND:**\n` +
-            `**False claim:** ${msg.content}\n` +
-            `**Why false:** ${detectionResults.misinformation.reason}\n` +
-            (detectionResults.misinformation.evidence ? `**Fact-check evidence:** ${detectionResults.misinformation.evidence}` : "");
-          
-          const evidenceUrl = detectionResults.contradiction.url || "";
-          const misinfoUrl = detectionResults.misinformation.url || "";
-          const allSources = [misinfoUrl].filter(Boolean);
-          
-          if (evidenceUrl && allSources.length > 0) {
-            // Both jump button and sources button  
-            const combinedId = `${Date.now()}-combined`;
-            // Create combined button row (side-by-side)
-            const combinedButtonRow = new ActionRowBuilder().addComponents([
-              new ButtonBuilder()
-                .setURL(evidenceUrl)
-                .setStyle(ButtonStyle.Link)
-                .setEmoji('🔗'),
-              new ButtonBuilder()
-                .setCustomId(`${SOURCE_BUTTON_ID}:${combinedId}`)
-                .setLabel('\u{1D48A}')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(false)
-            ]);
-            
-            const replyMsg = await msg.reply({
-              content: truncateMessage(combinedReply),
-              components: [combinedButtonRow]
-            });
-            latestSourcesByBotMsg.set(combinedId, { urls: allSources, timestamp: Date.now() });
-            latestSourcesByBotMsg.set(replyMsg.id, { urls: allSources, timestamp: Date.now() });
-          } else if (evidenceUrl) {
-            // Just jump button
-            await msg.reply({
-              content: truncateMessage(combinedReply),
-              components: [makeJumpButton(evidenceUrl)]
-            });
-          } else if (allSources.length > 0) {
-            // Just sources button
-            await replyWithSourcesButton(msg, { content: truncateMessage(combinedReply) }, allSources, latestSourcesByBotMsg);
-          } else {
-            // No buttons
-            await msg.reply(truncateMessage(combinedReply));
-          }
-          
-        } else if (hasContradiction) {
-          // CONTRADICTION ONLY
-          const contradictionReply = 
-            `⚡ **CONTRADICTION DETECTED** ⚡️\n\n` +
-            `-# \`\`\`${detectionResults.contradiction.evidence}\`\`\`\n` +
-            `-# \`\`\`${detectionResults.contradiction.contradicting || msg.content}\`\`\`\n\n` +
-            `${detectionResults.contradiction.reason}`;
-          
-          const evidenceUrl = detectionResults.contradiction.url || "";
-          
-          if (evidenceUrl) {
-            await msg.reply({
-              content: truncateMessage(contradictionReply),
-              components: [makeJumpButton(evidenceUrl)]
-            });
-          } else {
-            await msg.reply(truncateMessage(contradictionReply));
-          }
-          
-        } else if (hasMisinformation) {
-          // MISINFORMATION ONLY  
-          const misinfoReply = 
-            `🚩 **MISINFORMATION DETECTED** 🚩\n` +
-            `Reason: ${detectionResults.misinformation.reason}\n` +
-            (detectionResults.misinformation.evidence ? `Evidence: ${detectionResults.misinformation.evidence}` : "");
-          
-          const sourcesForButton = detectionResults.misinformation.url ? [detectionResults.misinformation.url] : [];
-          
-          if (sourcesForButton.length > 0) {
-            await replyWithSourcesButton(msg, { content: truncateMessage(misinfoReply) }, sourcesForButton, latestSourcesByBotMsg);
-          } else {
-            await msg.reply(truncateMessage(misinfoReply));
-          }
-        }
-      } // End of detectionResults check
-    } // End of shouldRunDetection check
-  } // End of DETECTION_ENABLED check
-
-  // ---- USER-FACING REPLIES ----
-  if (isMentioned || isReplyToBot) {
-    console.log(`[DEBUG] Bot mentioned or replied to. Processing reply...`);
-  try {
-    await msg.channel.sendTyping();
-    console.log(`[DEBUG] Typing indicator sent`);
-    
-    let userHistoryArr = null, channelHistoryArr = null;
-    console.log(`[DEBUG] Fetching user history...`);
-    try {
-      userHistoryArr = await fetchUserHistory(
-        msg.author.id, msg.channel.id, msg.guildId, 10, thisMsgId
-      );
-      console.log(`[DEBUG] User history fetched: ${userHistoryArr?.length || 0} messages`);
-    } catch (e) {
-      console.error(`[DEBUG] User history fetch failed:`, e);
-      userHistoryArr = null;
-      try { await msg.reply("The past refuses to reveal itself."); return; } catch {}
-    }
-    
-    console.log(`[DEBUG] Fetching channel history...`);
-    try {
-      channelHistoryArr = await fetchChannelHistory(
-        msg.channel.id, msg.guildId, 15, thisMsgId
-      );
-      console.log(`[DEBUG] Channel history fetched: ${channelHistoryArr?.length || 0} messages`);
-    } catch (e) {
-      console.error(`[DEBUG] Channel history fetch failed:`, e);
-      channelHistoryArr = null;
-      try { await msg.reply("All context is lost to the ether."); } catch {}
-    }
-    console.log(`[DEBUG] History check - User: ${userHistoryArr ? 'OK' : 'NULL'}, Channel: ${channelHistoryArr ? 'OK' : 'NULL'}`);
-    
-    if (!userHistoryArr || !channelHistoryArr) {
-      console.log(`[DEBUG] Insufficient history - exiting user-facing reply`);
-      try {
-        await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
-      } catch {}
-      return;
-    }
-    
-    console.log(`[DEBUG] History sufficient, proceeding with reply generation`);
-    
-    // Check if we have detection results to include in the response
-    const hasDetectionResults = detectionResults && DETECTION_ENABLED;
-    const hasContradiction = hasDetectionResults && detectionResults.contradiction && detectionResults.contradiction.contradiction === "yes";
-    const hasMisinformation = hasDetectionResults && detectionResults.misinformation && detectionResults.misinformation.misinformation === "yes";
-    
-    console.log(`[DEBUG] Including detection in reply: ${hasDetectionResults ? 'YES' : 'NO'} (Contradiction: ${hasContradiction}, Misinformation: ${hasMisinformation})`);
-
-    const allHistContent = [
-      ...userHistoryArr.map(m => m.content),
-      ...channelHistoryArr.map(m => m.content)
-    ];
-    const trivialCount = allHistContent.filter(isTrivialOrSafeMessage).length;
-    const totalCount = allHistContent.length;
-    if (totalCount > 0 && (trivialCount / totalCount) > 0.8) {
-      try {
-        await msg.reply("Little of substance has been spoken here so far.");
-      } catch {}
-      return;
-    }
-    function botName() {
-      return Math.random() < 0.33 ? "Arbiter" : (Math.random() < 0.5 ? "The Arbiter" : "Arbiter");
-    }
-    const userHistory = userHistoryArr.map(m => `You: ${m.content}`).reverse().join("\n");
-    const channelHistory = channelHistoryArr.map(m => {
-      if (m.type === "summary") return `[SUMMARY] ${m.summary}`;
-      if (m.user === msg.author.id) return `${m.displayName || m.username}: ${m.content}`;
-      if (m.user === client.user.id) return `${botName()}: ${m.content}`;
-      return `${m.displayName || m.username || "User"}: ${m.content}`;
-    }).join("\n");
-    const dateString = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-
-    // ---- NEWS SECTION: Exa /search ----
-    let newsSection = "";
-    let sourcesUsed = [];
-    try {
-      const newsRegex = /\b(news|headline|latest|article|current event|today)\b/i;
-      if (newsRegex.test(msg.content)) {
-        let topic = "world events";
-        const match = msg.content.match(/news (about|on|regarding) (.+)$/i);
-        if (match) topic = match[2];
-        const results = await exaSearch(`latest news about ${topic}`, 5);
-        // Inside your // ---- NEWS SECTION ---- block
-        if (results && results.length) {
-          newsSection = (`Here are real-time news headlines for "${topic}":\n` +
-          results.map(r =>
-            `• [${r.title}](${r.url})\n  ${r.text ? r.text.slice(0, 200) : ''}`
-          ).join("\n"));
-          sourcesUsed = results.map(r => cleanUrl(r.url)).filter(Boolean); // <-- ADD cleanUrl()
-        } else {
-          newsSection = "No up-to-date news articles found for that topic.";
-        }
-      }
-    } catch (e) {
-      newsSection = `News search failed: \`${e.message}\``;
-    }
-    // If this is a reply to a message (user or bot), treat it as the subject in the context
-    let referencedSection = "";
-    if (repliedToMsg) {
-      referencedSection =
-        `[referenced message]\nFrom: ${
-          repliedToMsg.member ? repliedToMsg.member.displayName : repliedToMsg.author.username
-        } (${repliedToMsg.author.username})\n${repliedToMsg.content}\n`;
-    }
-    
-          const prompt = `
-${SYSTEM_INSTRUCTIONS}
-
-${LOGICAL_PRINCIPLES_ENABLED ? getLogicalContext('general') : ''}
-
-Today is ${dateString}.
-Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${LOGICAL_PRINCIPLES_ENABLED ? ' Apply the logical principles above to enhance your reasoning and maintain consistency.' : ''}${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
-- Do not use ambiguous hedging or "on the one hand/on the other hand" language unless it is genuinely necessary.
-- Favor declarative, direct statements. When a position is unsupported, say so clearly and confidently.
-- Avoid generic phrases such as "It is important to note...", "It depends...", or "While both sides...".
-- Never conclude that "both sides have a point" if one side's claim is demonstrably weaker or unsupported.
-- Do not default to proposing compromise unless the evidence is genuinely balanced.
-- If you must indicate ambiguity, specify the best-supported or most-reasonable argument, do not equate unequal substantiations.` : ""}
-[user history]
-${userHistory}
-[channel context]
-${channelHistory}
-${newsSection ? `[news]\n${newsSection}` : ""}
-${referencedSection}
-[user message]
-"${msg.content}"
-[reply]
-`;
-
-    let replyText;
-    try {
-      const { userFacingLimit } = getRateLimiters();
-      const { aiCircuitBreaker } = getCircuitBreakers();
-      
-      if (!userFacingLimit) {
-        console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
-        const { result } = await aiCircuitBreaker.execute(async () => {
-          return aiUserFacing(prompt);
-        });
-        replyText = result;
-      } else {
-        console.log(`[RATE LIMIT] UserFacing AI queued (${userFacingLimit.pendingCount} pending, ${userFacingLimit.activeCount} active)`);
-        const { result } = await userFacingLimit(() => {
-          return aiCircuitBreaker.execute(async () => {
-            console.log("[RATE LIMIT] UserFacing AI executing");
-            return aiUserFacing(prompt);
-          });
-        });
-        replyText = result;
-      }
-    } catch (e) {
-      replyText = "The Arbiter chooses silence.";
-      console.warn("AI user-facing error:", e);
-    }
-
-    // ==== Source-gathering logic for non-news answers ====
-    if (sourcesUsed.length === 0) {
-      try {
-        // Assume exaAnswer returns { answer, urls }:
-        let exaRes = await exaAnswer(msg.content);
-        if (exaRes && exaRes.urls && exaRes.urls.length) sourcesUsed = exaRes.urls;
-      } catch (e) {}
-    }
-
-    // ---- Build final reply including detection results ----
-    let finalReply = replyText;
-    let finalSources = [...sourcesUsed];
-    
-    // Add detection alerts to the reply if present
-    if (hasContradiction || hasMisinformation) {
-      console.log(`[DEBUG] Combining detection results with user-facing reply`);
-      
-      let detectionSection = "\n\n---\n";
-      
-      if (hasContradiction && hasMisinformation) {
-        detectionSection += `⚡🚩 **CONTRADICTION & MISINFORMATION DETECTED** 🚩⚡\n\n`;
-        detectionSection += `**CONTRADICTION:** ${detectionResults.contradiction.reason}\n`;
-        detectionSection += `**MISINFORMATION:** ${detectionResults.misinformation.reason}`;
-        
-        if (detectionResults.misinformation.url) finalSources.push(detectionResults.misinformation.url);
-      } else if (hasContradiction) {
-        detectionSection += `⚡ **CONTRADICTION DETECTED** ⚡\n`;
-        detectionSection += `${detectionResults.contradiction.reason}`;
-      } else if (hasMisinformation) {
-        detectionSection += `🚩 **MISINFORMATION DETECTED** 🚩\n`;
-        detectionSection += `${detectionResults.misinformation.reason}`;
-        
-        if (detectionResults.misinformation.url) finalSources.push(detectionResults.misinformation.url);
-      }
-      
-      finalReply += detectionSection;
-    }
-
-    // ---- Send reply, platform source button if URLs exist ----
-    console.log('[DEBUG] finalSources:', finalSources);
-try {
-  const filteredSources = [...new Set(finalSources
-    .map(u => cleanUrl(u))
-    .filter(u => typeof u === "string" && u.startsWith("http")))];
-  if (filteredSources.length > 0) {
-    await replyWithSourcesButton(msg, { content: truncateMessage(finalReply) }, filteredSources, latestSourcesByBotMsg);
-  } else {
-    await msg.reply(truncateMessage(finalReply));
-  }
-} catch (e) {
-  console.error("Discord reply failed:", e);
-}
-
-    // ---- Log bot reply to Mongo ----
-    await saveBotReply(msg, truncateMessage(replyText), client.user);
-
-  } catch (err) {
-    try {
-      await msg.reply("Nobody will help you.");
-    } catch {}
-    console.error("AI user-facing failed:", err);
-    }
-}});
+// ---- LOGIN ----
 console.log("[STARTUP] Attempting to login to Discord...");
-console.log(`[DEBUG] Token present: ${process.env.DISCORD_TOKEN ? 'YES' : 'NO'}`);
-console.log(`[DEBUG] Token length: ${process.env.DISCORD_TOKEN?.length || 0}`);
+client.login(process.env.DISCORD_TOKEN).then(() => {
+  console.log("[STARTUP] Discord login initiated successfully");
+}).catch(error => {
+  console.error("[STARTUP] Discord login failed:", error);
+  process.exit(1);
+});
 
-client.login(process.env.DISCORD_TOKEN)
-  .then(() => {
-    console.log("[STARTUP] Discord login promise resolved!");
-  })
-  .catch(error => {
-    console.error("[STARTUP] Discord login failed:", error);
-    console.error("[STARTUP] Error details:", error.message);
-    process.exit(1);
-  });
+// ---- GRACEFUL SHUTDOWN ----
+process.on('SIGINT', () => {
+  console.log('[SHUTDOWN] Received SIGINT. Graceful shutdown...');
+  client.destroy();
+  process.exit(0);
+});
 
-// Add timeout to detect if login hangs
-setTimeout(() => {
-  if (!client.user) {
-    console.error("[STARTUP] Discord login timeout - bot never became ready");
-    console.log("[DEBUG] Client state:", {
-      readyAt: client.readyAt,
-      user: client.user?.tag || 'null',
-      status: client.ws?.status || 'unknown'
-    });
-  }
-}, 30000); // 30 second timeout
+process.on('SIGTERM', () => {
+  console.log('[SHUTDOWN] Received SIGTERM. Graceful shutdown...');
+  client.destroy();
+  process.exit(0);
+});
