@@ -79,7 +79,7 @@ const envSchema = Joi.object({
   EXA_API_KEY: Joi.string().required(),
   PORT: Joi.string().optional(),
   ALLOWED_CHANNELS: Joi.string().optional()
-});
+}).unknown(true); // Allow unknown environment variables (platform-specific vars like KUBERNETES_SERVICE_PORT_HTTPS)
 
 /**
  * Load and validate configuration from JSON files and environment variables
