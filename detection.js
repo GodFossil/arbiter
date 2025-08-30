@@ -147,7 +147,7 @@ function validateContradiction(statement1, statement2) {
 }
 
 // ---- MAIN DETECTION ENGINE ----
-async function detectContradictionOrMisinformation(msg) {
+async function detectContradictionOrMisinformation(msg, useLogicalPrinciples = USE_LOGICAL_PRINCIPLES) {
   let contradiction = null;
   let contradictionEvidenceUrl = "";
   let misinformation = null;
@@ -210,9 +210,9 @@ async function detectContradictionOrMisinformation(msg) {
       const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${USE_LOGICAL_PRINCIPLES ? getLogicalContext('contradiction', { contentAnalysis: contradictionContentAnalysis }) : ''}
+${useLogicalPrinciples ? getLogicalContext('contradiction', { contentAnalysis: contradictionContentAnalysis }) : ''}
 
-You are analyzing a user's current message against their prior messages for logical contradictions.${USE_LOGICAL_PRINCIPLES ? ' You have access to logical principles above.' : ''}
+You are analyzing a user's current message against their prior messages for logical contradictions.${useLogicalPrinciples ? ' You have access to logical principles above.' : ''}
 
 CONTENT ANALYSIS FOR CONTRADICTION CHECK:
 - User certainty level: ${contradictionContentAnalysis.hasUncertainty ? 'UNCERTAIN (contradictions less likely)' : 'DEFINITIVE'}
@@ -336,9 +336,9 @@ ${concatenated}
   const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${USE_LOGICAL_PRINCIPLES ? getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis }) : ''}
+${useLogicalPrinciples ? getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis }) : ''}
 
-You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.${USE_LOGICAL_PRINCIPLES ? ' You have access to logical principles above.' : ''}
+You are a fact-checking assistant focused on identifying CRITICAL misinformation that could cause harm.${useLogicalPrinciples ? ' You have access to logical principles above.' : ''}
 
 CONTENT ANALYSIS FOR FACT-CHECKING:
 - User certainty level: ${misinfoContentAnalysis.hasUncertainty ? 'UNCERTAIN (less likely to be misinformation)' : 'DEFINITIVE'}

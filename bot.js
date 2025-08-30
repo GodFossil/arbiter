@@ -77,6 +77,7 @@ function isBotActiveInChannel(msg) {
 
 // ---- DETECTION TOGGLE ----
 let DETECTION_ENABLED = true; // Global toggle for contradiction/misinformation detection
+let LOGICAL_PRINCIPLES_ENABLED = true; // Global toggle for logic.js reasoning framework
 
 // ---- PERSONALITY INJECTION ----
 const SYSTEM_INSTRUCTIONS = `
@@ -292,7 +293,8 @@ async function handleAdminCommands(msg) {
       await msg.reply(
         `⚡ **SYSTEM STATUS** ⚡\n\n` +
         `**Detection System:**\n` +
-        `• Contradiction/Misinformation Detection: ${DETECTION_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n\n` +
+        `• Contradiction/Misinformation Detection: ${DETECTION_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n` +
+        `• Logical Principles Framework: ${LOGICAL_PRINCIPLES_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n\n` +
         `**DigitalOcean AI Circuit Breaker:**\n` +
         `• State: ${aiStatus.state}\n` +
         `• Failures: ${aiStatus.failureCount}\n` +
@@ -333,6 +335,29 @@ async function handleAdminCommands(msg) {
     } catch (e) {
       console.warn("[MODLOG] Failed to toggle detection.", e);
       await msg.reply("The toggle resists manipulation.");
+      return true;
+    }
+  }
+  
+  if (msg.content === "!arbiter_toggle_logic") {
+    try {
+      LOGICAL_PRINCIPLES_ENABLED = !LOGICAL_PRINCIPLES_ENABLED;
+      const status = LOGICAL_PRINCIPLES_ENABLED ? 'ENABLED' : 'DISABLED';
+      const emoji = LOGICAL_PRINCIPLES_ENABLED ? '✅' : '❌';
+      
+      console.log(`[ADMIN] Logical principles toggled ${status} by guild owner`);
+      
+      await msg.reply(
+        `🧠 **LOGICAL PRINCIPLES TOGGLED** 🧠\n\n` +
+        `${emoji} **Logical Reasoning Framework: ${status}**\n\n` +
+        `${LOGICAL_PRINCIPLES_ENABLED ? 
+          '• AI will use advanced logical principles for reasoning\n• Enhanced contradiction detection with semantic validation\n• Fallacy detection and evidence hierarchy applied\n• Context-aware reasoning guidelines active' : 
+          '• AI will use basic reasoning without enhanced framework\n• Standard contradiction detection only\n• No advanced logical principle injection\n• Faster processing but less sophisticated analysis'}`
+      );
+      return true;
+    } catch (e) {
+      console.warn("[MODLOG] Failed to toggle logical principles.", e);
+      await msg.reply("Logic itself resists alteration.");
       return true;
     }
   }
@@ -511,7 +536,7 @@ client.on("messageCreate", async (msg) => {
     if (shouldRunDetection) {
       console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
       try {
-        detectionResults = await detectContradictionOrMisinformation(msg);
+        detectionResults = await detectContradictionOrMisinformation(msg, LOGICAL_PRINCIPLES_ENABLED);
         console.log(`[DEBUG] Detection result:`, detectionResults);
       } catch (e) {
         console.warn("Detection failure (silent to user):", e);
@@ -727,10 +752,10 @@ client.on("messageCreate", async (msg) => {
           const prompt = `
 ${SYSTEM_INSTRUCTIONS}
 
-${USE_LOGICAL_PRINCIPLES ? getLogicalContext('general') : ''}
+${LOGICAL_PRINCIPLES_ENABLED ? getLogicalContext('general') : ''}
 
 Today is ${dateString}.
-Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${USE_LOGICAL_PRINCIPLES ? ' Apply the logical principles above to enhance your reasoning and maintain consistency.' : ''}${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
+Reply concisely. Use recent context from user (by display name/nickname if available), me ("Arbiter" or "The Arbiter"), and others below. Include [SUMMARY]s if requested or contextually necessary. If [news] is present, focus on those results.${LOGICAL_PRINCIPLES_ENABLED ? ' Apply the logical principles above to enhance your reasoning and maintain consistency.' : ''}${referencedSection ? ` If [referenced message] is present, treat it as the main subject of the user's message.
 - Do not use ambiguous hedging or "on the one hand/on the other hand" language unless it is genuinely necessary.
 - Favor declarative, direct statements. When a position is unsupported, say so clearly and confidently.
 - Avoid generic phrases such as "It is important to note...", "It depends...", or "While both sides...".

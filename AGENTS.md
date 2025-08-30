@@ -69,6 +69,7 @@ PORT=3000 (optional, defaults to 3000)
 - **`!arbiter_principle [name]`** - Explain specific logical principles (nonContradiction, excludedMiddle, identity)
 - **`!arbiter_status`** - Show system status including circuit breakers, cache sizes, and detection state
 - **`!arbiter_toggle_detection`** - Toggle contradiction/misinformation detection on/off (messages still stored for context)
+- **`!arbiter_toggle_logic`** - Toggle logical principles framework (enhanced reasoning vs basic reasoning)
 
 ## Code Style & Conventions
 
