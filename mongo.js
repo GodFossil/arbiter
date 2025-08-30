@@ -33,6 +33,12 @@ async function createIndexes(db) {
       { name: "channel_history_idx" }
     );
     
+    // Compound index for summarization queries (ascending timestamp order)
+    await collection.createIndex(
+      { type: 1, channel: 1, guildId: 1, ts: 1 },
+      { name: "summarization_idx" }
+    );
+    
     // TTL index for automatic cleanup of old messages (optional - 30 days)
     await collection.createIndex(
       { ts: 1 },
