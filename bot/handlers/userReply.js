@@ -2,7 +2,8 @@ const { fetchUserHistory, fetchChannelHistory, saveBotReply } = require("../../s
 const { isTrivialOrSafeMessage } = require("../../filters");
 const { replyWithSourcesButton } = require("../ui/components");
 const { truncateMessage, getDisplayName } = require("../ui/formatting");
-const { aiUserFacing, exaSearch, cleanUrl } = require("../../ai-utils");
+const { aiUserFacing } = require("../../ai");
+const { exaSearch, cleanUrl } = require("../../ai-utils");
 const { getLogicalContext } = require("../../logic");
 
 /**
