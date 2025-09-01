@@ -1,4 +1,5 @@
-const { detectContradictionOrMisinformation } = require("../../detection");
+// const { detectContradictionOrMisinformation } = require("../../detection"); // Replaced by queue system
+const { detectContradictionOrMisinformationQueued, waitForDetectionResults } = require("../../queue-detection");
 const { isTrivialOrSafeMessage, isOtherBotCommand } = require("../../filters");
 const { replyWithSourcesButton } = require("../ui/components");
 const { truncateMessage, formatCombinedDetectionResult } = require("../ui/formatting");
@@ -52,7 +53,17 @@ async function processBackgroundDetection(msg, state, isUserFacingTrigger = fals
   
   try {
     const timer = require('../../logger').logHelpers.detectionAnalysis(log, msg.content);
-    const detectionResults = await detectContradictionOrMisinformation(msg, state.LOGICAL_PRINCIPLES_ENABLED);
+    
+    // Use queued detection for better performance
+    const jobPromises = await detectContradictionOrMisinformationQueued(
+      msg, 
+      state.LOGICAL_PRINCIPLES_ENABLED,
+      log.correlationId || require('../../logger').generateCorrelationId()
+    );
+    
+    // Wait for results
+    const detectionResults = await waitForDetectionResults(jobPromises, log);
+    
     timer.end({
       hasContradiction: detectionResults?.contradiction?.contradiction === "yes",
       hasMisinformation: detectionResults?.misinformation?.misinformation === "yes"

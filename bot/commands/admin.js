@@ -3,6 +3,8 @@ const { analyzeLogicalContent } = require("../../logic");
 const { resetAllData, getCacheStatus } = require("../../storage");
 const { getCircuitBreakers } = require("../../ai-utils");
 const { clearSourceMappings, getSourceMappingsSize } = require("../ui/components");
+const { getQueueStatus, clearAllQueues } = require("../../queue");
+const { sanitizeUserInput } = require("../../prompt-security");
 
 /**
  * Handle admin commands from guild owners
@@ -49,6 +51,9 @@ async function handleAdminCommands(msg, state, logger = null) {
       // Completely reset the database structure and all storage caches
       await resetAllData();
       
+      // Clear job queues
+      await clearAllQueues();
+      
       // Clear remaining local caches
       clearSourceMappings();
       
@@ -56,7 +61,7 @@ async function handleAdminCommands(msg, state, logger = null) {
         adminUserId: msg.author.id,
         guildId: msg.guildId
       });
-      await msg.reply("🗑️ **COMPLETE SYSTEM RESET PERFORMED**\n\n• MongoDB database completely dropped and recreated\n• All collections, indexes, and artifacts removed\n• Fresh database structure initialized\n• All in-memory caches cleared\n• Arbiter reset to pristine state");
+      await msg.reply("🗑️ **COMPLETE SYSTEM RESET PERFORMED**\n\n• MongoDB database completely dropped and recreated\n• All collections, indexes, and artifacts removed\n• Fresh database structure initialized\n• All job queues cleared\n• All in-memory caches cleared\n• Arbiter reset to pristine state");
       return true;
     } catch (e) {
       log.error("Failed to reset database structure", { 
@@ -71,7 +76,7 @@ async function handleAdminCommands(msg, state, logger = null) {
   // ---- CONTENT ANALYSIS ----
   if (msg.content.startsWith("!arbiter_analyze ")) {
     try {
-      const textToAnalyze = msg.content.replace("!arbiter_analyze ", "").trim();
+      const textToAnalyze = sanitizeUserInput(msg.content.replace("!arbiter_analyze ", "").trim(), { maxLength: 500 });
       const analysis = analyzeLogicalContent(textToAnalyze);
       await msg.reply(
         `🧠 **Logical Analysis**\n` +
@@ -132,12 +137,18 @@ async function handleAdminCommands(msg, state, logger = null) {
       const aiStatus = aiCircuitBreaker.getStatus();
       const exaStatus = exaCircuitBreaker.getStatus();
       const storageCacheStatus = getCacheStatus();
+      const queueStatus = await getQueueStatus();
       
       await msg.reply(
         `⚡ **SYSTEM STATUS** ⚡\n\n` +
         `**Detection System:**\n` +
         `• Contradiction/Misinformation Detection: ${state.DETECTION_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n` +
         `• Logical Principles Framework: ${state.LOGICAL_PRINCIPLES_ENABLED ? '✅ ENABLED' : '❌ DISABLED'}\n\n` +
+        `**Job Queue Status:**\n` +
+        `• Contradiction Queue: ${queueStatus.contradiction?.waiting || 0} waiting, ${queueStatus.contradiction?.active || 0} active\n` +
+        `• Misinformation Queue: ${queueStatus.misinformation?.waiting || 0} waiting, ${queueStatus.misinformation?.active || 0} active\n` +
+        `• Summarization Queue: ${queueStatus.summarization?.waiting || 0} waiting, ${queueStatus.summarization?.active || 0} active\n` +
+        `• User Reply Queue: ${queueStatus.userReply?.waiting || 0} waiting, ${queueStatus.userReply?.active || 0} active\n\n` +
         `**DigitalOcean AI Circuit Breaker:**\n` +
         `• State: ${aiStatus.state}\n` +
         `• Failures: ${aiStatus.failureCount}\n` +
@@ -200,7 +211,7 @@ async function handleAdminCommands(msg, state, logger = null) {
       const status = newStatus ? 'ENABLED' : 'DISABLED';
       const emoji = newStatus ? '✅' : '❌';
       
-      console.log(`[ADMIN] Logical principles toggled ${status} by guild owner`);
+      log.info("Logical principles toggled by guild owner", { status: status.toLowerCase() });
       
       await msg.reply(
         `🧠 **LOGICAL PRINCIPLES TOGGLED** 🧠\n\n` +

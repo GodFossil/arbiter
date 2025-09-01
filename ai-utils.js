@@ -1,5 +1,6 @@
 const axios = require("axios");
 const config = require('./config');
+const logger = require('./logger');
 
 // Environment constants
 const EXA_API_KEY = process.env.EXA_API_KEY;
@@ -24,7 +25,12 @@ async function initializeRateLimiting() {
   summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
   factCheckLimit = pLimit(config.limits.exaConcurrency);   // Max concurrent fact-checks (medium priority)
   
-  console.log(`[RATE LIMIT] AI call limits configured - UserFacing: ${config.limits.aiConcurrency}, Background: ${config.limits.aiConcurrency}, Summary: 1, FactCheck: ${config.limits.exaConcurrency}`);
+  logger.info("AI call limits configured", {
+    userFacing: config.limits.aiConcurrency,
+    background: config.limits.aiConcurrency, 
+    summary: 1,
+    factCheck: config.limits.exaConcurrency
+  });
 }
 
 // ---- CIRCUIT BREAKER IMPLEMENTATION ----
@@ -44,12 +50,12 @@ class CircuitBreaker {
   async execute(operation) {
     if (this.state === 'OPEN') {
       if (Date.now() - this.lastFailureTime < this.timeout) {
-        console.log(`[CIRCUIT BREAKER] ${this.name} is OPEN - failing fast`);
+        logger.debug("Circuit breaker OPEN - failing fast", { name: this.name });
         throw new Error(`Circuit breaker ${this.name} is OPEN`);
       }
       // Transition to HALF_OPEN for testing
       this.state = 'HALF_OPEN';
-      console.log(`[CIRCUIT BREAKER] ${this.name} transitioning to HALF_OPEN`);
+      logger.info("Circuit breaker transitioning to HALF_OPEN", { name: this.name });
     }
     
     try {
@@ -69,7 +75,7 @@ class CircuitBreaker {
       if (this.successCount >= 2) { // Require 2 successes to close
         this.state = 'CLOSED';
         this.successCount = 0;
-        console.log(`[CIRCUIT BREAKER] ${this.name} recovered - state: CLOSED`);
+        logger.info("Circuit breaker recovered", { name: this.name, state: 'CLOSED' });
       }
     }
   }
@@ -81,10 +87,15 @@ class CircuitBreaker {
     if (this.state === 'HALF_OPEN') {
       this.state = 'OPEN';
       this.successCount = 0;
-      console.log(`[CIRCUIT BREAKER] ${this.name} failed during test - state: OPEN`);
+      logger.warn("Circuit breaker failed during test", { name: this.name, state: 'OPEN' });
     } else if (this.failureCount >= this.failureThreshold) {
       this.state = 'OPEN';
-      console.log(`[CIRCUIT BREAKER] ${this.name} threshold exceeded (${this.failureCount}/${this.failureThreshold}) - state: OPEN`);
+      logger.error("Circuit breaker threshold exceeded", { 
+        name: this.name, 
+        failureCount: this.failureCount,
+        threshold: this.failureThreshold,
+        state: 'OPEN'
+      });
     }
   }
   
@@ -113,7 +124,7 @@ function initializeCircuitBreakers() {
     resetTimeout: 30000 // 30 seconds
   });
 
-  console.log("[CIRCUIT BREAKER] Circuit breakers initialized - AI, Exa");
+  logger.info("Circuit breakers initialized", { services: ['DigitalOcean-AI', 'Exa-API'] });
 }
 
 // Utility function for cleaning URLs
@@ -140,7 +151,7 @@ async function exaAnswer(query) {
     }
     return { answer: res.data.answer || "", urls: urls };
   }).catch(err => {
-    console.warn("Exa /answer failed:", err.message);
+    logger.warn("Exa /answer failed", { error: err.message });
     return { answer: "", urls: [] };
   });
 }
@@ -154,7 +165,7 @@ async function exaSearch(query, numResults = 10) {
     );
     return Array.isArray(res.data.results) ? res.data.results : [];
   }).catch(err => {
-    console.warn("Exa /search failed:", err.message);
+    logger.warn("Exa /search failed", { error: err.message });
     return [];
   });
 }
@@ -165,16 +176,19 @@ async function aiFlash(prompt) {
   const { aiBackground } = require("./ai");
   
   if (!backgroundLimit) {
-    console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
+    logger.warn("Rate limiting not initialized, executing directly", { operation: 'background' });
     return await aiCircuitBreaker.execute(async () => {
       return aiBackground(prompt);
     });
   }
   
-  console.log(`[RATE LIMIT] Background AI queued (${backgroundLimit.pendingCount} pending, ${backgroundLimit.activeCount} active)`);
+  logger.debug("Background AI queued", { 
+    pending: backgroundLimit.pendingCount,
+    active: backgroundLimit.activeCount
+  });
   return await backgroundLimit(() => {
     return aiCircuitBreaker.execute(async () => {
-      console.log("[RATE LIMIT] Background AI executing");
+      logger.debug("Background AI executing");
       return aiBackground(prompt);
     });
   });
@@ -185,16 +199,19 @@ async function aiFactCheckFlash(prompt) {
   const { aiFactCheck } = require("./ai");
   
   if (!factCheckLimit) {
-    console.warn("[RATE LIMIT] Rate limiting not initialized, executing directly");
+    logger.warn("Rate limiting not initialized, executing directly", { operation: 'factCheck' });
     return await aiCircuitBreaker.execute(async () => {
       return aiFactCheck(prompt);
     });
   }
   
-  console.log(`[RATE LIMIT] FactCheck AI queued (${factCheckLimit.pendingCount} pending, ${factCheckLimit.activeCount} active)`);
+  logger.debug("FactCheck AI queued", { 
+    pending: factCheckLimit.pendingCount,
+    active: factCheckLimit.activeCount
+  });
   return await factCheckLimit(() => {
     return aiCircuitBreaker.execute(async () => {
-      console.log("[RATE LIMIT] FactCheck AI executing");
+      logger.debug("FactCheck AI executing");
       return aiFactCheck(prompt);
     });
   });

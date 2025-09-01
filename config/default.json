@@ -58,6 +58,39 @@
     "aiConcurrency": 3,
     "exaConcurrency": 2
   },
+  "redis": {
+    "host": "localhost",
+    "port": 6379,
+    "db": 0,
+    "maxRetriesPerRequest": 3,
+    "retryDelayOnFailover": 100
+  },
+  "queues": {
+    "contradiction": {
+      "name": "arbiter-contradiction",
+      "concurrency": 2,
+      "removeOnComplete": 10,
+      "removeOnFail": 25
+    },
+    "misinformation": {
+      "name": "arbiter-misinformation", 
+      "concurrency": 2,
+      "removeOnComplete": 10,
+      "removeOnFail": 25
+    },
+    "summarization": {
+      "name": "arbiter-summarization",
+      "concurrency": 1,
+      "removeOnComplete": 5,
+      "removeOnFail": 10
+    },
+    "userReply": {
+      "name": "arbiter-user-reply",
+      "concurrency": 3,
+      "removeOnComplete": 10,
+      "removeOnFail": 25
+    }
+  },
   "logging": {
     "level": "debug",
     "enableCorrelationIds": true,

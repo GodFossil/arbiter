@@ -74,7 +74,9 @@ const componentLoggers = {
   admin: logger.child({ component: 'admin' }),
   ui: logger.child({ component: 'ui' }),
   storage: logger.child({ component: 'storage' }),
-  exa: logger.child({ component: 'exa' })
+  exa: logger.child({ component: 'exa' }),
+  queue: logger.child({ component: 'queue' }),
+  workers: logger.child({ component: 'workers' })
 };
 
 /**
@@ -162,6 +164,16 @@ const logHelpers = {
     return new PerformanceTimer(logger, 'db-operation', {
       operation,
       collection
+    });
+  },
+
+  /**
+   * Log queue operations
+   */
+  queueOperation: (logger, queueType, messageId) => {
+    return new PerformanceTimer(logger, 'queue-operation', {
+      queueType,
+      messageId
     });
   }
 };

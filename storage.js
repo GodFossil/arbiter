@@ -160,12 +160,15 @@ async function fetchChannelHistory(channelId, guildId, limit = 7, excludeMsgId =
   
   // If we have enough cached messages, return them
   if (cachedMessages.length >= limit) {
-    console.log(`[CACHE HIT] Channel history for ${channelId} (${cachedMessages.length} cached messages)`);
+    logger.debug("Channel history cache hit", { 
+      channelId, 
+      cachedCount: cachedMessages.length 
+    });
     return cachedMessages.slice(0, limit);
   }
   
   // Cache miss or insufficient data - fetch from MongoDB
-  console.log(`[CACHE MISS] Channel history for ${channelId} - fetching from MongoDB`);
+  logger.debug("Channel history cache miss - fetching from MongoDB", { channelId });
   const db = await connect();
   
   const [full, summaries] = await Promise.all([
@@ -271,8 +274,19 @@ Summary:
       let summary = "";
       try {
         if (aiSummarization && typeof aiSummarization === 'function') {
-          const { result } = await aiSummarization(summaryPrompt);
-          summary = result;
+          // Use queued summarization for better performance
+          const { queueSummarization } = require('./queue');
+          const { generateCorrelationId } = require('./logger');
+          
+          const correlationId = generateCorrelationId();
+          const summarizationJob = await queueSummarization({
+            summaryPrompt,
+            correlationId
+          });
+          
+          // Wait for summarization to complete
+          const result = await summarizationJob.finished();
+          summary = result.summary;
         } else {
           summary = "[summarization function not provided]";
         }

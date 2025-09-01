@@ -5,6 +5,7 @@ const { truncateMessage, getDisplayName } = require("../ui/formatting");
 const { aiUserFacing } = require("../../ai");
 const { exaSearch, exaAnswer, cleanUrl } = require("../../ai-utils");
 const { getLogicalContext } = require("../../logic");
+const { secureUserContent } = require("../../prompt-security");
 
 /**
  * Generate and send user-facing reply when bot is mentioned or replied to
@@ -32,12 +33,14 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     log.debug("Current message saved", { messageId: thisMsgId });
     
     // Fetch conversation context
-    const context = await fetchConversationContext(msg, client, thisMsgId);
+    const context = await fetchConversationContext(msg, client, thisMsgId, log);
     if (!context) {
       log.warn("Insufficient message history for reply");
       try {
         await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
-      } catch {}
+      } catch (error) {
+        log.warn("Failed to send insufficient history message", { error: error.message });
+      }
       return;
     }
     
@@ -45,7 +48,9 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     if (isConversationTrivial(context)) {
       try {
         await msg.reply("Little of substance has been spoken here so far.");
-      } catch {}
+      } catch (error) {
+        log.warn("Failed to send trivial conversation message", { error: error.message });
+      }
       return;
     }
     
@@ -115,14 +120,16 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     });
     try {
       await msg.reply("Nobody will help you.");
-    } catch {}
+    } catch (error) {
+      log.error("Failed to send error fallback message", { error: error.message });
+    }
   }
 }
 
 /**
  * Fetch conversation context (user and channel history)
  */
-async function fetchConversationContext(msg, client, thisMsgId = null) {
+async function fetchConversationContext(msg, client, thisMsgId = null, logger = null) {
   
   // Use fallback logger if none provided
   const log = logger || require('../../logger').createCorrelatedLogger(
@@ -143,7 +150,9 @@ async function fetchConversationContext(msg, client, thisMsgId = null) {
     try { 
       await msg.reply("The past refuses to reveal itself."); 
       return null; 
-    } catch {}
+    } catch (error) {
+      log.warn("Failed to send user history fetch error message", { error: error.message });
+    }
   }
   
   log.debug("Fetching channel history");
@@ -159,7 +168,9 @@ async function fetchConversationContext(msg, client, thisMsgId = null) {
     try { 
       await msg.reply("All context is lost to the ether."); 
       return null; 
-    } catch {}
+    } catch (error) {
+      log.warn("Failed to send channel history fetch error message", { error: error.message });
+    }
   }
   
   if (!userHistoryArr || !channelHistoryArr) {
@@ -250,7 +261,7 @@ ${userHistory || "No recent messages available"}
 **Channel Conversation History:**
 ${channelHistory || "No conversation history available"}
 
-**Current User Message:** "${msg.content}"
+${secureUserContent(msg.content, { label: 'Current User Message' })}
 ${newsData.newsSection}
 
 ${detectionResults ? buildDetectionContext(detectionResults) : ""}

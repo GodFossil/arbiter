@@ -70,6 +70,41 @@ const configSchema = Joi.object({
     exaConcurrency: Joi.number().integer().min(1).max(20).required()
   }).required(),
 
+  redis: Joi.object({
+    host: Joi.string().required(),
+    port: Joi.number().integer().min(1).max(65535).required(),
+    db: Joi.number().integer().min(0).max(15).required(),
+    maxRetriesPerRequest: Joi.number().integer().min(1).max(10).required(),
+    retryDelayOnFailover: Joi.number().integer().min(50).max(5000).required()
+  }).required(),
+
+  queues: Joi.object({
+    contradiction: Joi.object({
+      name: Joi.string().required(),
+      concurrency: Joi.number().integer().min(1).max(10).required(),
+      removeOnComplete: Joi.number().integer().min(1).max(100).required(),
+      removeOnFail: Joi.number().integer().min(1).max(100).required()
+    }).required(),
+    misinformation: Joi.object({
+      name: Joi.string().required(),
+      concurrency: Joi.number().integer().min(1).max(10).required(),
+      removeOnComplete: Joi.number().integer().min(1).max(100).required(),
+      removeOnFail: Joi.number().integer().min(1).max(100).required()
+    }).required(),
+    summarization: Joi.object({
+      name: Joi.string().required(),
+      concurrency: Joi.number().integer().min(1).max(5).required(),
+      removeOnComplete: Joi.number().integer().min(1).max(50).required(),
+      removeOnFail: Joi.number().integer().min(1).max(50).required()
+    }).required(),
+    userReply: Joi.object({
+      name: Joi.string().required(),
+      concurrency: Joi.number().integer().min(1).max(10).required(),
+      removeOnComplete: Joi.number().integer().min(1).max(100).required(),
+      removeOnFail: Joi.number().integer().min(1).max(100).required()
+    }).required()
+  }).required(),
+
   logging: Joi.object({
     level: Joi.string().valid('debug', 'info', 'warn', 'error', 'silent').required(),
     enableCorrelationIds: Joi.boolean().required(),
@@ -84,7 +119,8 @@ const envSchema = Joi.object({
   MONGODB_URI: Joi.string().uri().required(),
   EXA_API_KEY: Joi.string().required(),
   PORT: Joi.string().optional(),
-  ALLOWED_CHANNELS: Joi.string().optional()
+  ALLOWED_CHANNELS: Joi.string().optional(),
+  REDIS_URL: Joi.string().uri().optional()
 }).unknown(true); // Allow unknown environment variables (platform-specific vars like KUBERNETES_SERVICE_PORT_HTTPS)
 
 /**
@@ -126,7 +162,7 @@ function loadConfig(environment = 'default') {
       throw new Error(`Environment validation error: ${envError.message}`);
     }
 
-    console.log(`[CONFIG] Configuration loaded and validated successfully (${environment})`);
+    console.log(`[CONFIG] Configuration loaded and validated successfully`, { environment });
     return validatedConfig;
 
   } catch (error) {
