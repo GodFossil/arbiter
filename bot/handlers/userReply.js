@@ -12,23 +12,32 @@ const { getLogicalContext } = require("../../logic");
  * @param {Client} client - Discord client instance
  * @param {object} state - Bot state with detection settings
  * @param {object} detectionResults - Optional detection results to include
+ * @param {object} logger - Structured logger with correlation context
  */
-async function handleUserFacingReply(msg, client, state, detectionResults = null) {
-  console.log(`[DEBUG] Bot mentioned or replied to. Processing reply...`);
+async function handleUserFacingReply(msg, client, state, detectionResults = null, logger = null) {
+  // Use fallback logger if none provided
+  const log = logger || require('../../logger').createCorrelatedLogger(
+    require('../../logger').generateCorrelationId(),
+    { userId: msg.author.id, component: 'userReply' }
+  );
+  
+  log.info("Bot mentioned or replied to - processing reply");
   
   try {
     await msg.channel.sendTyping();
-    console.log(`[DEBUG] Typing indicator sent`);
+    log.debug("Typing indicator sent");
     
     // Save current message first
     const thisMsgId = await saveCurrentMessage(msg, state.SYSTEM_INSTRUCTIONS);
+    log.debug("Current message saved", { messageId: thisMsgId });
     
     // Fetch conversation context
     const context = await fetchConversationContext(msg, client, thisMsgId);
     if (!context) {
+      log.warn("Insufficient message history for reply");
       try {
-      await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
-    } catch {}
+        await msg.reply("Not enough message history available for a quality reply. Truth sleeps.");
+      } catch {}
       return;
     }
     
@@ -47,21 +56,25 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     const prompt = buildUserReplyPrompt(msg, context, newsData, detectionResults, state, client);
     
     // Generate AI response
+    const timer = require('../../logger').logHelpers.aiRequest(log, 'user-facing', prompt);
     const { result, modelUsed } = await aiUserFacing(prompt);
-    console.log(`[AI] User-facing reply generated using ${modelUsed}`);
+    timer.end({ 
+      modelUsed,
+      responseLength: result.length
+    });
     
     // ==== Source-gathering logic for non-news answers ====
     let allSources = [...(newsData.sources || [])];
     if (allSources.length === 0) {
       try {
-        console.log(`[DEBUG] No news sources found, trying exaAnswer for general sources`);
+        log.debug("No news sources found, trying exaAnswer for general sources");
         const exaRes = await exaAnswer(msg.content);
         if (exaRes && exaRes.urls && exaRes.urls.length) {
           allSources = exaRes.urls;
-          console.log(`[DEBUG] Found ${allSources.length} sources via exaAnswer`);
+          log.info("Found sources via exaAnswer", { sourceCount: allSources.length });
         }
       } catch (e) {
-        console.warn("[DEBUG] exaAnswer failed:", e.message);
+        log.warn("exaAnswer failed", { error: e.message });
       }
     }
     
@@ -80,7 +93,10 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
       .map(u => cleanUrl(u))
       .filter(u => typeof u === "string" && u.startsWith("http")))];
     
-    console.log('[DEBUG] filteredSources:', filteredSources);
+    log.debug("Sources prepared for reply", { 
+      sourceCount: filteredSources.length,
+      sources: filteredSources.slice(0, 3) // Log first 3 for debugging
+    });
     
     // Send reply with appropriate buttons
     if (filteredSources.length > 0) {
@@ -93,10 +109,13 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     await saveBotReply(msg, finalReply, client.user);
     
   } catch (err) {
+    log.error("User-facing reply failed", { 
+      error: err.message,
+      stack: err.stack
+    });
     try {
       await msg.reply("Nobody will help you.");
     } catch {}
-    console.error("AI user-facing failed:", err);
   }
 }
 
@@ -105,15 +124,21 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
  */
 async function fetchConversationContext(msg, client, thisMsgId = null) {
   
-  console.log(`[DEBUG] Fetching user history...`);
+  // Use fallback logger if none provided
+  const log = logger || require('../../logger').createCorrelatedLogger(
+    require('../../logger').generateCorrelationId(),
+    { userId: msg.author.id, component: 'fetchContext' }
+  );
+  
+  log.debug("Fetching user history");
   let userHistoryArr = null;
   try {
     userHistoryArr = await fetchUserHistory(
       msg.author.id, msg.channel.id, msg.guildId, 10, thisMsgId
     );
-    console.log(`[DEBUG] User history fetched: ${userHistoryArr?.length || 0} messages`);
+    log.debug("User history fetched", { messageCount: userHistoryArr?.length || 0 });
   } catch (e) {
-    console.error(`[DEBUG] User history fetch failed:`, e);
+    log.error("User history fetch failed", { error: e.message });
     userHistoryArr = null;
     try { 
       await msg.reply("The past refuses to reveal itself."); 
@@ -121,15 +146,15 @@ async function fetchConversationContext(msg, client, thisMsgId = null) {
     } catch {}
   }
   
-  console.log(`[DEBUG] Fetching channel history...`);
+  log.debug("Fetching channel history");
   let channelHistoryArr = null;
   try {
     channelHistoryArr = await fetchChannelHistory(
       msg.channel.id, msg.guildId, 15, thisMsgId
     );
-    console.log(`[DEBUG] Channel history fetched: ${channelHistoryArr?.length || 0} messages`);
+    log.debug("Channel history fetched", { messageCount: channelHistoryArr?.length || 0 });
   } catch (e) {
-    console.error(`[DEBUG] Channel history fetch failed:`, e);
+    log.error("Channel history fetch failed", { error: e.message });
     channelHistoryArr = null;
     try { 
       await msg.reply("All context is lost to the ether."); 
@@ -177,17 +202,21 @@ async function generateNewsSection(content) {
         topic = topicMatch[1].trim();
       }
       
-      console.log(`[NEWS] Searching for news about: ${topic}`);
+      // Use temporary logger for news section
+      const { exa } = require('../../logger');
+      exa.info("Searching for news", { topic });
       const newsResults = await exaSearch(`latest news ${topic} today`, 3);
       
       if (newsResults && newsResults.length > 0) {
         newsSection = `\n\n**📰 Latest News (${topic}):**\n` +
           newsResults.map((item, i) => `${i + 1}. **${item.title}** - ${item.text || 'No summary available'}`).join('\n');
         sources = newsResults.map(item => item.url).filter(Boolean);
+        exa.info("News results found", { resultCount: newsResults.length });
       }
     }
   } catch (e) {
-    console.warn("News generation failed:", e);
+    const { exa } = require('../../logger');
+    exa.warn("News generation failed", { error: e.message });
   }
   
   return { newsSection, sources };
@@ -262,7 +291,7 @@ function integrateDetectionIntoReply(aiReply, detectionResults, state) {
     return aiReply;
   }
   
-  console.log(`[DEBUG] Combining detection results with user-facing reply`);
+  // This log statement will be handled by the calling function's logger
   
   let detectionSection = "\n\n---\n";
   
@@ -291,7 +320,9 @@ async function saveCurrentMessage(msg, systemInstructions = "") {
     const insertedId = await saveUserMessage(msg, aiSummarization, systemInstructions);
     return insertedId?.toString() || null;
   } catch (e) {
-    console.warn("Failed to save current message:", e);
+    // Use basic logger for save failures
+    const { storage } = require('../../logger');
+    storage.warn("Failed to save current message", { error: e.message });
     return null;
   }
 }

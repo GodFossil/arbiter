@@ -5,6 +5,7 @@ const { processBackgroundDetection } = require("../handlers/detection");
 const { handleUserFacingReply } = require("../handlers/userReply");
 const { saveUserMessage } = require("../../storage");
 const { aiSummarization } = require("../../ai");
+const { generateCorrelationId, logHelpers } = require("../../logger");
 
 /**
  * Handle Discord messageCreate events
@@ -18,11 +19,18 @@ async function handleMessageCreate(msg, client, state) {
   if (msg.channel.type !== ChannelType.GuildText) return;
   if (!isBotActiveInChannel(msg)) return;
 
-  console.log(`[MESSAGE] Processing message from ${msg.author.username}: "${msg.content}"`);
+  // Generate correlation ID and create logger
+  const correlationId = generateCorrelationId();
+  const logger = logHelpers.messageStart(correlationId, msg);
+  
+  logger.info("Processing message", { content: msg.content.slice(0, 100) });
 
   // ---- ADMIN COMMANDS ----
-  const adminHandled = await handleAdminCommands(msg, state);
-  if (adminHandled) return;
+  const adminHandled = await handleAdminCommands(msg, state, logger);
+  if (adminHandled) {
+    logger.info("Admin command handled");
+    return;
+  }
 
   // ---- MENTION/REPLY DETECTION ----
   const isMentioned = msg.mentions.has(client.user);
@@ -34,30 +42,34 @@ async function handleMessageCreate(msg, client, state) {
       repliedToMsg = await msg.channel.messages.fetch(msg.reference.messageId);
       if (repliedToMsg?.author?.id === client.user.id) {
         isReplyToBot = true;
-        console.log(`[DEBUG] User replied to bot message`);
+        logger.debug("User replied to bot message", { repliedMessageId: repliedToMsg.id });
       }
     } catch (e) {
-      console.warn("Failed to fetch replied-to message:", e);
+      logger.warn("Failed to fetch replied-to message", { error: e.message });
     }
   }
 
   // ---- SAVE MESSAGE TO STORAGE ----
   let thisMsgId = null;
   try {
+    const timer = logHelpers.dbOperation(logger, 'saveUserMessage', 'messages');
     thisMsgId = await saveUserMessage(msg, aiSummarization, state.SYSTEM_INSTRUCTIONS);
-    console.log(`[DEBUG] Message saved with ID: ${thisMsgId}`);
+    timer.end({ savedMessageId: thisMsgId });
   } catch (e) {
-    console.warn("Failed to save message:", e);
+    logger.warn("Failed to save message", { error: e.message });
   }
 
   // ---- BACKGROUND DETECTION ----
   const isUserFacingTrigger = isMentioned || isReplyToBot;
-  const detectionResults = await processBackgroundDetection(msg, state, isUserFacingTrigger);
+  const detectionResults = await processBackgroundDetection(msg, state, isUserFacingTrigger, logger);
 
   // ---- USER-FACING REPLIES ----
   if (isUserFacingTrigger) {
-    await handleUserFacingReply(msg, client, state, detectionResults);
+    logger.info("Handling user-facing reply", { isMentioned, isReplyToBot });
+    await handleUserFacingReply(msg, client, state, detectionResults, logger);
   }
+  
+  logger.debug("Message processing completed");
 }
 
 module.exports = {

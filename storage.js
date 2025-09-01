@@ -1,6 +1,7 @@
 const { connect, resetDatabase } = require("./mongo");
 const { isTrivialOrSafeMessage } = require("./filters");
 const config = require('./config');
+const { storage: logger } = require('./logger');
 
 // ---- LRU CACHE IMPLEMENTATION ----
 class LRUCache {
@@ -121,12 +122,15 @@ async function fetchUserHistory(userId, channelId, guildId, limit = 7, excludeMs
   
   // If we have enough cached messages, return them
   if (cachedMessages.length >= limit) {
-    console.log(`[CACHE HIT] User history for ${userId} (${cachedMessages.length} cached messages)`);
+    logger.debug("User history cache hit", { 
+      userId, 
+      cachedCount: cachedMessages.length 
+    });
     return cachedMessages.slice(0, limit);
   }
   
   // Cache miss or insufficient data - fetch from MongoDB
-  console.log(`[CACHE MISS] User history for ${userId} - fetching from MongoDB`);
+  logger.debug("User history cache miss - fetching from MongoDB", { userId });
   const db = await connect();
   const query = { type: "message", user: userId, channel: channelId, guildId };
   if (excludeMsgId) query._id = { $ne: excludeMsgId };
@@ -274,7 +278,7 @@ Summary:
         }
       } catch (e) {
         summary = "[failed to summarize]";
-        console.warn("Summary error:", e);
+        logger.warn("Summary error", { error: e.message });
       }
       await db.collection("messages").insertOne({
         type: "summary",
@@ -314,7 +318,7 @@ async function saveBotReply(msg, content, clientUser) {
       ts: new Date(),
     });
   } catch (e) {
-    console.warn("DB insert error (bot reply):", e);
+    logger.warn("DB insert error (bot reply)", { error: e.message });
   }
 }
 
@@ -336,15 +340,20 @@ function getCacheStatus() {
 // ---- CACHE CLEANUP ----
 function performCacheCleanup() {
   // Clean up analysis caches with TTL
+  let analysisCleanedCount = 0;
   for (const [key, cached] of contentAnalysisCache.entries()) {
     if (cached && (Date.now() - cached.timestamp > ANALYSIS_CACHE_TTL_MS)) {
       contentAnalysisCache.delete(key);
+      analysisCleanedCount++;
     }
   }
   
   // Enforce size limit on analysis cache to prevent memory leaks
   if (contentAnalysisCache.size > MAX_ANALYSIS_CACHE_SIZE) {
-    console.log(`[DEBUG] Analysis cache too large (${contentAnalysisCache.size}), removing oldest entries`);
+    logger.debug("Analysis cache too large - removing oldest entries", {
+      currentSize: contentAnalysisCache.size,
+      maxSize: MAX_ANALYSIS_CACHE_SIZE
+    });
     const entries = Array.from(contentAnalysisCache.entries());
     entries.sort((a, b) => a[1].timestamp - b[1].timestamp); // Sort by timestamp
     const toRemove = Math.floor(MAX_ANALYSIS_CACHE_SIZE * 0.3); // Remove 30% of entries
@@ -355,11 +364,18 @@ function performCacheCleanup() {
   
   // Clean up validation cache when it grows too large
   if (contradictionValidationCache.size > config.cache.maxValidationCacheSize) {
-    console.log(`[DEBUG] Clearing validation cache (${contradictionValidationCache.size} entries)`);
+    logger.debug("Clearing validation cache", {
+      currentSize: contradictionValidationCache.size,
+      maxSize: config.cache.maxValidationCacheSize
+    });
     contradictionValidationCache.clear();
   }
   
-  console.log(`[DEBUG] Cache cleanup: messages=${messageCache.size}, analysis=${contentAnalysisCache.size}, validation=${contradictionValidationCache.size}`);
+  logger.info("Cache cleanup completed", {
+    messageCacheSize: messageCache.size,
+    analysisCacheSize: contentAnalysisCache.size,
+    validationCacheSize: contradictionValidationCache.size
+  });
 }
 
 // ---- DATABASE UTILITIES ----

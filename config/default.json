@@ -57,5 +57,10 @@
   "limits": {
     "aiConcurrency": 3,
     "exaConcurrency": 2
+  },
+  "logging": {
+    "level": "debug",
+    "enableCorrelationIds": true,
+    "enablePerformanceTracking": true
   }
 }

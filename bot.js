@@ -1,9 +1,12 @@
 console.log("[STARTUP] Loading Arbiter bot...");
 require("dotenv").config();
-console.log("[STARTUP] Environment loaded");
-console.log("[STARTUP] Loading configuration...");
+
+// Initialize structured logging early
+const { startup: logger } = require('./logger');
+logger.info("Environment loaded");
+logger.info("Loading configuration...");
 const config = require('./config');
-console.log("[STARTUP] Configuration loaded and validated");
+logger.info("Configuration loaded and validated");
 
 // ---- MODULE IMPORTS ----
 const express = require("express");
@@ -15,13 +18,13 @@ const { cleanupSourceMappings } = require("./bot/ui/components");
 const { performCacheCleanup } = require("./storage");
 const { initializeAIUtils } = require("./ai-utils");
 
-console.log("[STARTUP] All modules loaded successfully");
+logger.info("All modules loaded successfully");
 
 // ---- KEEPALIVE SERVER ----
 const app = express();
 const PORT = config.server.port;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
-app.listen(PORT, () => console.log(`Keepalive server running on port ${PORT}`));
+app.listen(PORT, () => logger.info("Keepalive server started", { port: PORT }));
 
 // ---- DISCORD CLIENT SETUP ----
 const client = createDiscordClient();
@@ -34,21 +37,26 @@ setInterval(async () => {
   // Perform storage cache cleanup
   performCacheCleanup();
   
-  console.log(`[DEBUG] Periodic cleanup completed`);
+  const { storage } = require('./logger');
+  storage.debug("Periodic cleanup completed");
 }, config.server.cleanupIntervalMinutes * 60 * 1000);
 
 // ---- EVENT HANDLERS ----
 
 client.once("ready", async () => {
-  console.log(`[READY] Logged in as ${client.user.tag}!`);
-  console.log(`[READY] Serving ${client.guilds.cache.size} guilds with ${client.users.cache.size} users`);
+  const { discord } = require('./logger');
+  discord.info("Bot ready", { 
+    botTag: client.user.tag,
+    guildCount: client.guilds.cache.size,
+    userCount: client.users.cache.size
+  });
   
   // Initialize AI utilities with rate limiting
   try {
     await initializeAIUtils();
-    console.log("[READY] AI utilities initialized successfully");
+    discord.info("AI utilities initialized successfully");
   } catch (e) {
-    console.error("[READY] Failed to initialize AI utilities:", e);
+    discord.error("Failed to initialize AI utilities", { error: e.message });
   }
 });
 
@@ -56,7 +64,12 @@ client.on("messageCreate", async (msg) => {
   try {
     await handleMessageCreate(msg, client, botState);
   } catch (e) {
-    console.error("[ERROR] Message handling failed:", e);
+    const { discord } = require('./logger');
+    discord.error("Message handling failed", { 
+      error: e.message,
+      userId: msg.author?.id,
+      messageId: msg.id
+    });
   }
 });
 
@@ -64,57 +77,72 @@ client.on("interactionCreate", async (interaction) => {
   try {
     await handleInteractionCreate(interaction);
   } catch (e) {
-    console.error("[ERROR] Interaction handling failed:", e);
+    const { discord } = require('./logger');
+    discord.error("Interaction handling failed", { 
+      error: e.message,
+      userId: interaction.user?.id,
+      interactionId: interaction.id
+    });
   }
 });
 
 // ---- ERROR HANDLING ----
 client.on("error", error => {
-  console.error("[DISCORD] Client error:", error);
+  const { discord } = require('./logger');
+  discord.error("Discord client error", { error: error.message });
 });
 
 client.on("warn", warning => {
-  console.warn("[DISCORD] Client warning:", warning);
+  const { discord } = require('./logger');
+  discord.warn("Discord client warning", { warning });
 });
 
 client.on("debug", info => {
-  console.log("[DISCORD] Debug info:", info);
+  const { discord } = require('./logger');
+  discord.debug("Discord debug info", { info });
 });
 
 client.on("shardError", (error, shardId) => {
-  console.error(`[DISCORD] Shard ${shardId} error:`, error);
+  const { discord } = require('./logger');
+  discord.error("Discord shard error", { shardId, error: error.message });
 });
 
 client.on("shardReady", (shardId, unavailableGuilds) => {
-  console.log(`[DISCORD] Shard ${shardId} ready. Unavailable guilds: ${unavailableGuilds?.size || 0}`);
+  const { discord } = require('./logger');
+  discord.info("Discord shard ready", { 
+    shardId, 
+    unavailableGuilds: unavailableGuilds?.size || 0 
+  });
 });
 
 client.on("shardDisconnect", (closeEvent, shardId) => {
-  console.warn(`[DISCORD] Shard ${shardId} disconnected:`, closeEvent);
+  const { discord } = require('./logger');
+  discord.warn("Discord shard disconnected", { shardId, closeEvent });
 });
 
 client.on("shardReconnecting", shardId => {
-  console.log(`[DISCORD] Shard ${shardId} reconnecting...`);
+  const { discord } = require('./logger');
+  discord.info("Discord shard reconnecting", { shardId });
 });
 
 // ---- LOGIN ----
-console.log("[STARTUP] Attempting to login to Discord...");
+logger.info("Attempting to login to Discord");
 client.login(process.env.DISCORD_TOKEN).then(() => {
-  console.log("[STARTUP] Discord login initiated successfully");
+  logger.info("Discord login initiated successfully");
 }).catch(error => {
-  console.error("[STARTUP] Discord login failed:", error);
+  logger.error("Discord login failed", { error: error.message });
   process.exit(1);
 });
 
 // ---- GRACEFUL SHUTDOWN ----
 process.on('SIGINT', () => {
-  console.log('[SHUTDOWN] Received SIGINT. Graceful shutdown...');
+  logger.info('Received SIGINT - graceful shutdown initiated');
   client.destroy();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('[SHUTDOWN] Received SIGTERM. Graceful shutdown...');
+  logger.info('Received SIGTERM - graceful shutdown initiated');
   client.destroy();
   process.exit(0);
 });

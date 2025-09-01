@@ -5,7 +5,10 @@ Arbiter is an advanced Discord bot designed for The Debate Server that monitors 
 
 ## Commands
 - **Start bot**: `node bot.js`
+- **Start bot (production)**: `NODE_ENV=production node bot.js`
 - **Testing**: Manual/integration testing only - no automated test framework
+- **View logs (development)**: Colored console output with pino-pretty
+- **View logs (production)**: JSON format for log aggregation
 
 ## Architecture & Core Files
 

@@ -18,5 +18,10 @@
   "limits": {
     "aiConcurrency": 5,
     "exaConcurrency": 3
+  },
+  "logging": {
+    "level": "info",
+    "enableCorrelationIds": true,
+    "enablePerformanceTracking": true
   }
 }

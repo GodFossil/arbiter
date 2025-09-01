@@ -9,7 +9,12 @@ async function handleInteractionCreate(interaction) {
   if (interaction.type !== InteractionType.MessageComponent) return;
   
   if (interaction.customId.startsWith(SOURCE_BUTTON_ID)) {
-    console.log(`[INTERACTION] Source button clicked by ${interaction.user.username}`);
+    const { ui } = require('../../logger');
+    ui.info("Source button clicked", { 
+      userId: interaction.user.id,
+      username: interaction.user.username,
+      buttonId: interaction.customId
+    });
     await handleSourceButtonInteraction(interaction);
   }
 }

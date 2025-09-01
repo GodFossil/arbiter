@@ -8,27 +8,43 @@ const { clearSourceMappings, getSourceMappingsSize } = require("../ui/components
  * Handle admin commands from guild owners
  * @param {Message} msg - Discord message object
  * @param {object} state - Bot state object with toggles
+ * @param {object} logger - Structured logger with correlation context
  * @returns {boolean} True if admin command was handled
  */
-async function handleAdminCommands(msg, state) {
-  console.log(`[DEBUG] Admin command check: "${msg.content}" from user ${msg.author.id}`);
+async function handleAdminCommands(msg, state, logger = null) {
+  // Use fallback logger if none provided (for backwards compatibility)
+  const log = logger || require('../../logger').admin;
+  
+  log.debug("Admin command check", { 
+    command: msg.content,
+    userId: msg.author.id
+  });
   
   if (!msg.guild) {
-    console.log("[DEBUG] No guild found - not a server message");
+    log.debug("No guild found - not a server message");
     return false;
   }
   
   const ownerId = msg.guild.ownerId || (await msg.guild.fetchOwner()).id;
-  console.log(`[DEBUG] Guild owner: ${ownerId}, Message author: ${msg.author.id}`);
+  log.debug("Checking admin permissions", { 
+    guildOwnerId: ownerId, 
+    messageAuthorId: msg.author.id 
+  });
   
   if (msg.author.id !== ownerId) {
-    console.log("[DEBUG] User is not guild owner - admin command denied");
+    log.warn("Admin command denied - not guild owner", { 
+      attemptedUserId: msg.author.id,
+      guildOwnerId: ownerId 
+    });
     return false;
   }
 
   // ---- SYSTEM RESET ----
   if (msg.content === "!arbiter_reset_all") {
-    console.log("[DEBUG] Reset command matched - executing database reset");
+    const { logAudit } = require('../../logger');
+    log.warn("System reset command initiated", { adminUserId: msg.author.id });
+    logAudit("system_reset", msg.author.id, { guildId: msg.guildId });
+    
     try {
       // Completely reset the database structure and all storage caches
       await resetAllData();
@@ -36,11 +52,17 @@ async function handleAdminCommands(msg, state) {
       // Clear remaining local caches
       clearSourceMappings();
       
-      console.log("[ADMIN] Complete database and memory reset performed by guild owner");
+      log.info("Complete database and memory reset performed", { 
+        adminUserId: msg.author.id,
+        guildId: msg.guildId
+      });
       await msg.reply("🗑️ **COMPLETE SYSTEM RESET PERFORMED**\n\n• MongoDB database completely dropped and recreated\n• All collections, indexes, and artifacts removed\n• Fresh database structure initialized\n• All in-memory caches cleared\n• Arbiter reset to pristine state");
       return true;
     } catch (e) {
-      console.warn("[MODLOG] Failed to reset database structure.", e);
+      log.error("Failed to reset database structure", { 
+        error: e.message,
+        adminUserId: msg.author.id
+      });
       await msg.reply("The void resists complete reformation. Database structure may be partially reset.");
       return true;
     }
@@ -66,7 +88,10 @@ async function handleAdminCommands(msg, state) {
       );
       return true;
     } catch (e) {
-      console.warn("[MODLOG] Failed to analyze content.", e);
+      log.error("Failed to analyze content", { 
+        error: e.message,
+        content: textToAnalyze?.slice(0, 50)
+      });
       await msg.reply("Analysis proves elusive.");
       return true;
     }
@@ -91,7 +116,10 @@ async function handleAdminCommands(msg, state) {
       );
       return true;
     } catch (e) {
-      console.warn("[MODLOG] Failed to get principle.", e);
+      log.error("Failed to get principle", { 
+        error: e.message,
+        principleName
+      });
       await msg.reply("Wisdom remains hidden.");
       return true;
     }
@@ -126,7 +154,7 @@ async function handleAdminCommands(msg, state) {
       );
       return true;
     } catch (e) {
-      console.warn("[MODLOG] Failed to get system status.", e);
+      log.error("Failed to get system status", { error: e.message });
       await msg.reply("Status inquiry proves elusive.");
       return true;
     }
@@ -139,7 +167,16 @@ async function handleAdminCommands(msg, state) {
       const status = newStatus ? 'ENABLED' : 'DISABLED';
       const emoji = newStatus ? '✅' : '❌';
       
-      console.log(`[ADMIN] Detection toggled ${status} by guild owner`);
+      const { logAudit } = require('../../logger');
+      log.info("Detection system toggled", { 
+        newStatus,
+        adminUserId: msg.author.id,
+        guildId: msg.guildId
+      });
+      logAudit("toggle_detection", msg.author.id, { 
+        newStatus, 
+        guildId: msg.guildId 
+      });
       
       await msg.reply(
         `🔧 **DETECTION SYSTEM TOGGLED** 🔧\n\n` +
@@ -150,7 +187,7 @@ async function handleAdminCommands(msg, state) {
       );
       return true;
     } catch (e) {
-      console.warn("[MODLOG] Failed to toggle detection.", e);
+      log.error("Failed to toggle detection", { error: e.message });
       await msg.reply("The toggle resists manipulation.");
       return true;
     }
@@ -174,7 +211,7 @@ async function handleAdminCommands(msg, state) {
       );
       return true;
     } catch (e) {
-      console.warn("[MODLOG] Failed to toggle logical principles.", e);
+      log.error("Failed to toggle logical principles", { error: e.message });
       await msg.reply("Logic itself resists alteration.");
       return true;
     }

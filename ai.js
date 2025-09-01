@@ -1,5 +1,6 @@
 const axios = require('axios');
 const config = require('./config');
+const { ai: logger, logHelpers } = require('./logger');
 const DO_AI_URL = config.ai.digitalOceanUrl;
 const DO_AI_KEY = process.env.DO_AI_API_KEY;
 
@@ -9,11 +10,17 @@ async function doAIRequest(prompt, modelNames, temperature = 0.7, maxTokens = 20
     throw new Error("DO_AI_API_KEY environment variable not set");
   }
   
-  console.log(`[AI] Attempting request with models: ${modelNames.join(', ')}`);
+  logger.info("AI request started", { 
+    models: modelNames,
+    temperature,
+    maxTokens,
+    promptLength: prompt.length
+  });
   
   for (const model of modelNames) {
+    const timer = logHelpers.aiRequest(logger, model, prompt);
     try {
-      console.log(`[AI] Trying model: ${model}`);
+      logger.debug("Trying model", { model });
       const res = await axios.post(
         DO_AI_URL,
         {
@@ -32,13 +39,21 @@ async function doAIRequest(prompt, modelNames, temperature = 0.7, maxTokens = 20
       
       const text = res.data.choices?.[0]?.message?.content;
       if (text) {
-        console.log(`[AI] Success with model: ${model}`);
+        timer.end({ 
+          success: true,
+          responseLength: text.length
+        });
         return { result: text, modelUsed: model };
       } else {
-        console.warn(`[AI] Model ${model} returned empty response`);
+        timer.error(new Error("Empty response"));
+        logger.warn("Model returned empty response", { model });
       }
     } catch (err) {
-      console.warn(`[AI] Model ${model} failed:`, err.response?.data || err.message);
+      timer.error(err);
+      logger.warn("Model request failed", { 
+        model,
+        error: err.response?.data || err.message
+      });
       if (model === modelNames[modelNames.length - 1]) throw err;
     }
   }

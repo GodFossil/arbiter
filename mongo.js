@@ -1,6 +1,7 @@
 // mongo.js
 const { MongoClient } = require("mongodb");
 const config = require('./config');
+const { mongo: logger } = require('./logger');
 
 const uri = process.env.MONGODB_URI;
 const client = new MongoClient(uri, { maxPoolSize: config.mongodb.maxPoolSize });
@@ -48,7 +49,10 @@ async function createIndexes(db) {
       const newTTL = config.mongodb.ttlCleanupDays * 24 * 60 * 60;
       
       if (ttlIndex && ttlIndex.expireAfterSeconds !== newTTL) {
-        console.log(`[MONGO] Dropping existing TTL index (${ttlIndex.expireAfterSeconds}s) to recreate with new value (${newTTL}s)`);
+        logger.info("Dropping existing TTL index to recreate with new value", {
+          oldTTL: ttlIndex.expireAfterSeconds,
+          newTTL: newTTL
+        });
         await collection.dropIndex("ttl_cleanup");
       }
     } catch (e) {
@@ -60,9 +64,9 @@ async function createIndexes(db) {
       { expireAfterSeconds: config.mongodb.ttlCleanupDays * 24 * 60 * 60, name: "ttl_cleanup" }
     );
     
-    console.log("[MONGO] Performance indexes created successfully");
+    logger.info("Performance indexes created successfully");
   } catch (error) {
-    console.warn("[MONGO] Index creation warning:", error.message);
+    logger.warn("Index creation warning", { error: error.message });
   }
 }
 
@@ -75,18 +79,18 @@ async function resetDatabase() {
     // Drop the entire database to remove all collections, indexes, and artifacts
     const dbName = "arbiter-memory";
     await client.db(dbName).dropDatabase();
-    console.log(`[MONGO] Database '${dbName}' completely dropped`);
+    logger.warn("Database completely dropped", { database: dbName });
     
     // Reset the db reference so it gets recreated with fresh indexes
     db = null;
     
     // Reconnect and recreate the database structure
     await connect();
-    console.log(`[MONGO] Database '${dbName}' recreated with fresh structure`);
+    logger.info("Database recreated with fresh structure", { database: dbName });
     
     return true;
   } catch (error) {
-    console.error("[MONGO] Database reset failed:", error);
+    logger.error("Database reset failed", { error: error.message });
     throw error;
   }
 }

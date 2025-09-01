@@ -13,13 +13,20 @@ const SOURCE_BUTTON_ID = "arbiter-show-sources";
  * @param {Message} msg - Discord message object
  * @param {object} state - Bot state with detection settings
  * @param {boolean} isUserFacingTrigger - Whether this is triggered by mention/reply
+ * @param {object} logger - Structured logger with correlation context
  * @returns {object|null} Detection results or null if no detection
  */
-async function processBackgroundDetection(msg, state, isUserFacingTrigger = false) {
-  console.log(`[DEBUG] Detection enabled status: ${state.DETECTION_ENABLED}`);
+async function processBackgroundDetection(msg, state, isUserFacingTrigger = false, logger = null) {
+  // Use fallback logger if none provided
+  const log = logger || require('../../logger').detection;
+  
+  log.debug("Background detection check", { 
+    detectionEnabled: state.DETECTION_ENABLED,
+    isUserFacingTrigger 
+  });
   
   if (!state.DETECTION_ENABLED) {
-    console.log(`[DEBUG] Detection disabled globally - skipping background detection`);
+    log.debug("Detection disabled globally - skipping background detection");
     return null;
   }
 
@@ -30,27 +37,42 @@ async function processBackgroundDetection(msg, state, isUserFacingTrigger = fals
     msg.content.length > 8; // Minimum substantive length
   
   if (!shouldRunDetection) {
-    console.log(`[DEBUG] Message filtered out - not running detection`);
+    log.debug("Message filtered out - not running detection", {
+      contentLength: msg.content.length,
+      maxLength: MAX_FACTCHECK_CHARS,
+      isTrivial: isTrivialOrSafeMessage(msg.content),
+      isBotCommand: isOtherBotCommand(msg.content)
+    });
     return null;
   }
 
-  console.log(`[DEBUG] Running background detection for: "${msg.content}"`);
+  log.info("Running background detection", { 
+    contentPreview: msg.content.slice(0, 50) + (msg.content.length > 50 ? '...' : '')
+  });
   
   try {
+    const timer = require('../../logger').logHelpers.detectionAnalysis(log, msg.content);
     const detectionResults = await detectContradictionOrMisinformation(msg, state.LOGICAL_PRINCIPLES_ENABLED);
-    console.log(`[DEBUG] Detection result:`, detectionResults);
+    timer.end({
+      hasContradiction: detectionResults?.contradiction?.contradiction === "yes",
+      hasMisinformation: detectionResults?.misinformation?.misinformation === "yes"
+    });
     
     // Only send immediate detection alerts if user is NOT mentioning/replying to bot
-    console.log(`[DEBUG] User-facing trigger: ${isUserFacingTrigger}, will ${isUserFacingTrigger ? 'defer' : 'send'} detection alerts`);
+    log.debug("Detection analysis completed", {
+      isUserFacingTrigger,
+      willSendAlert: !isUserFacingTrigger,
+      hasResults: !!detectionResults
+    });
     
     if (detectionResults && !isUserFacingTrigger) {
-      await sendDetectionAlerts(msg, detectionResults);
+      await sendDetectionAlerts(msg, detectionResults, log);
     }
     
     return detectionResults;
     
   } catch (e) {
-    console.warn("Detection failure (silent to user):", e);
+    log.warn("Detection failure (silent to user)", { error: e.message });
     return null;
   }
 }
@@ -59,8 +81,10 @@ async function processBackgroundDetection(msg, state, isUserFacingTrigger = fals
  * Send detection alerts to Discord based on detection results
  * @param {Message} msg - Discord message object  
  * @param {object} detectionResults - Results from detection service
+ * @param {object} logger - Structured logger with correlation context
  */
-async function sendDetectionAlerts(msg, detectionResults) {
+async function sendDetectionAlerts(msg, detectionResults, logger = null) {
+  const log = logger || require('../../logger').detection;
   const hasContradiction = detectionResults.contradiction && detectionResults.contradiction.contradiction === "yes";
   const hasMisinformation = detectionResults.misinformation && detectionResults.misinformation.misinformation === "yes";
   

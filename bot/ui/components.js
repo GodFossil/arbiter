@@ -130,7 +130,8 @@ async function cleanupSourceMappings(client) {
           await foundMessage.edit({ components: [] });
         }
       } catch (e) {
-        console.warn(`Failed to disable button for message ${id}:`, e.message);
+        const { ui } = require('../../logger');
+        ui.warn("Failed to disable button for message", { messageId: id, error: e.message });
       }
     }
     
@@ -140,7 +141,12 @@ async function cleanupSourceMappings(client) {
 
   // Enforce size limit on source mappings to prevent memory leaks
   if (latestSourcesByBotMsg.size > MAX_SOURCE_MAPPINGS) {
-    console.log(`[DEBUG] Source mappings cache too large (${latestSourcesByBotMsg.size}), removing oldest entries`);
+    const { ui } = require('../../logger');
+    ui.debug("Source mappings cache too large - removing oldest entries", {
+      currentSize: latestSourcesByBotMsg.size,
+      maxSize: MAX_SOURCE_MAPPINGS,
+      removingCount: Math.floor(MAX_SOURCE_MAPPINGS * 0.2)
+    });
     const entries = Array.from(latestSourcesByBotMsg.entries());
     entries.sort((a, b) => a[1].timestamp - b[1].timestamp); // Sort by timestamp
     const toRemove = Math.floor(MAX_SOURCE_MAPPINGS * 0.2); // Remove 20% of entries

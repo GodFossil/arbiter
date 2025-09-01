@@ -68,6 +68,12 @@ const configSchema = Joi.object({
   limits: Joi.object({
     aiConcurrency: Joi.number().integer().min(1).max(20).required(),
     exaConcurrency: Joi.number().integer().min(1).max(20).required()
+  }).required(),
+
+  logging: Joi.object({
+    level: Joi.string().valid('debug', 'info', 'warn', 'error', 'silent').required(),
+    enableCorrelationIds: Joi.boolean().required(),
+    enablePerformanceTracking: Joi.boolean().required()
   }).required()
 });
 
