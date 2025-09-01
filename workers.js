@@ -2,19 +2,18 @@
 const { Worker } = require('bullmq');
 const Redis = require('ioredis');
 const config = require('./config');
-const { workers: logger, generateCorrelationId, createCorrelatedLogger } = require('./logger');
+const { workers: logger, createCorrelatedLogger } = require('./logger');
 
 // Import AI processing functions
-const { aiBackground, aiFactCheck, aiSummarization, aiUserFacing } = require('./ai');
+const { aiSummarization, aiUserFacing } = require('./ai');
 const { aiFlash, aiFactCheckFlash, exaAnswer } = require('./ai-utils');
 const { getLogicalContext, analyzeLogicalContent } = require('./logic');
 const { 
   contentAnalysisCache,
-  contradictionValidationCache,
-  fetchUserMessagesForDetection
+  contradictionValidationCache
 } = require('./storage');
 const { secureUserContent } = require('./prompt-security');
-const { isTrivialOrSafeMessage, isOtherBotCommand } = require('./filters');
+const { isTrivialOrSafeMessage } = require('./filters');
 const { validateContradiction, SYSTEM_INSTRUCTIONS } = require('./detection');
 
 // ---- REDIS CONNECTION FOR WORKERS ----
@@ -45,7 +44,9 @@ async function processContradictionJob(job) {
   
   log.info("Processing contradiction detection job", { 
     messageId: messageData.id,
-    historyCount: userHistory.length 
+    historyCount: userHistory.length,
+    hasApiKey: !!process.env.DO_AI_API_KEY,
+    jobDataValid: !!(messageData && userHistory)
   });
   
   try {
