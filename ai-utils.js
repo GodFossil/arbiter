@@ -16,21 +16,32 @@ let aiCircuitBreaker, exaCircuitBreaker;
 
 // ---- RATE LIMITING SETUP ----
 async function initializeRateLimiting() {
-  // Load p-limit dynamically (ES module)
-  pLimit = (await import("p-limit")).default;
-  
-  // Initialize rate limiters
-  userFacingLimit = pLimit(config.limits.aiConcurrency); // Max concurrent user-facing replies (highest priority)
-  backgroundLimit = pLimit(config.limits.aiConcurrency);  // Max concurrent background detections (medium priority) 
-  summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
-  factCheckLimit = pLimit(config.limits.exaConcurrency);   // Max concurrent fact-checks (medium priority)
-  
-  logger.info("AI call limits configured", {
-    userFacing: config.limits.aiConcurrency,
-    background: config.limits.aiConcurrency, 
-    summary: 1,
-    factCheck: config.limits.exaConcurrency
-  });
+  try {
+    logger.debug("Loading p-limit module...");
+    // Load p-limit dynamically (ES module)
+    pLimit = (await import("p-limit")).default;
+    logger.debug("p-limit module loaded successfully");
+    
+    // Initialize rate limiters
+    userFacingLimit = pLimit(config.limits.aiConcurrency); // Max concurrent user-facing replies (highest priority)
+    backgroundLimit = pLimit(config.limits.aiConcurrency);  // Max concurrent background detections (medium priority) 
+    summaryLimit = pLimit(1);     // Max 1 concurrent summarization (lowest priority)
+    factCheckLimit = pLimit(config.limits.exaConcurrency);   // Max concurrent fact-checks (medium priority)
+    
+    logger.info("AI call limits configured", {
+      userFacing: config.limits.aiConcurrency,
+      background: config.limits.aiConcurrency, 
+      summary: 1,
+      factCheck: config.limits.exaConcurrency
+    });
+  } catch (error) {
+    logger.error("Failed to initialize rate limiting", {
+      error: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+    throw error; // Re-throw to fail initialization properly
+  }
 }
 
 // ---- CIRCUIT BREAKER IMPLEMENTATION ----
@@ -219,8 +230,24 @@ async function aiFactCheckFlash(prompt) {
 
 // Initialize the module
 async function initializeAIUtils() {
-  initializeCircuitBreakers();
-  await initializeRateLimiting();
+  try {
+    logger.debug("Starting AI utilities initialization...");
+    initializeCircuitBreakers();
+    logger.debug("Circuit breakers initialized");
+    
+    await initializeRateLimiting();
+    logger.debug("Rate limiting initialized");
+    
+    logger.info("AI utilities initialization completed successfully");
+  } catch (error) {
+    logger.error("AI utilities initialization failed", {
+      error: error.message,
+      stack: error.stack,
+      name: error.name,
+      code: error.code
+    });
+    throw error;
+  }
 }
 
 // Export all functions and classes
