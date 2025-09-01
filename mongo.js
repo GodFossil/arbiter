@@ -41,6 +41,30 @@ async function createIndexes(db) {
       { name: "summarization_idx" }
     );
     
+    // Additional compound index for channel message counting (used before summarization)
+    await collection.createIndex(
+      { type: 1, channel: 1, guildId: 1 },
+      { name: "channel_count_idx" }
+    );
+    
+    // Compound index for detection queries (user messages excluding specific message)
+    await collection.createIndex(
+      { type: 1, user: 1, channel: 1, guildId: 1, discordMessageId: 1, ts: -1 },
+      { name: "detection_query_idx" }
+    );
+    
+    // Compound index for channel messages with content filtering (used in fetchChannelHistory)
+    await collection.createIndex(
+      { type: 1, channel: 1, guildId: 1, content: 1, ts: -1 },
+      { name: "channel_content_idx" }
+    );
+    
+    // Compound index for summary retrieval by channel
+    await collection.createIndex(
+      { type: 1, channel: 1, guildId: 1, ts: -1 },
+      { name: "summary_retrieval_idx" }
+    );
+    
     // TTL index for automatic cleanup of old messages (configurable days)
     // Drop existing TTL index if it exists with different expiration
     try {
