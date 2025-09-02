@@ -1,6 +1,6 @@
 const axios = require("axios");
 const config = require('./config');
-const { ai: logger } = require('./logger');
+const logger = require('./logger');
 
 // Environment constants
 const EXA_API_KEY = process.env.EXA_API_KEY;
