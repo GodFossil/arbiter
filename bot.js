@@ -163,7 +163,6 @@ client.on("interactionCreate", async (interaction) => {
 
 // ---- ERROR HANDLING ----
 client.on("error", error => {
-  console.error("DISCORD ERROR:", error.message);
   const { discord } = require('./logger');
   discord.error("Discord client error", { error: error.message });
 });
@@ -184,7 +183,6 @@ client.on("shardError", (error, shardId) => {
 });
 
 client.on("shardReady", (shardId, unavailableGuilds) => {
-  console.log("DISCORD SHARD READY:", shardId);
   const { discord } = require('./logger');
   discord.info("Discord shard ready", { 
     shardId, 
@@ -210,27 +208,10 @@ client.on("shardReady", (shardId, unavailableGuilds) => {
 
 // ---- LOGIN ----
 logger.info("Attempting to login to Discord");
-console.log("DISCORD LOGIN: Starting login process...");
-
-// Add timeout to detect hanging login
-const loginTimeout = setTimeout(() => {
-  console.error("DISCORD LOGIN: Login timed out after 30 seconds");
-  logger.error("Discord login timed out");
-  process.exit(1);
-}, 30000);
-
 client.login(process.env.DISCORD_TOKEN).then(() => {
-  clearTimeout(loginTimeout);
-  console.log("DISCORD LOGIN: Login promise resolved successfully");
   logger.info("Discord login initiated successfully");
 }).catch(error => {
-  clearTimeout(loginTimeout);
-  console.error("DISCORD LOGIN: Login failed with error:", error.message);
-  logger.error("Discord login failed", { 
-    error: error.message, 
-    stack: error.stack,
-    code: error.code 
-  });
+  logger.error("Discord login failed", { error: error.message });
   process.exit(1);
 });
 
