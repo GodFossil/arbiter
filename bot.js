@@ -35,11 +35,8 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', (error) => {
   logger.fatal('Uncaught Exception thrown', { 
     error: error.message,
-    stack: error.stack,
-    name: error.name,
-    code: error.code
+    stack: error.stack
   });
-  console.error('[UNCAUGHT EXCEPTION]', error); // Also log to console for debugging
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
@@ -58,48 +55,23 @@ app.get('/status', async (_req, res) => {
 app.listen(PORT, () => logger.info("Keepalive server started", { port: PORT }));
 
 // ---- DISCORD CLIENT SETUP ----
-let client;
-try {
-  logger.info("Creating Discord client...");
-  client = createDiscordClient();
-  logger.info("Discord client created successfully");
-} catch (error) {
-  logger.fatal("Failed to create Discord client", { 
-    error: error.message, 
-    stack: error.stack 
-  });
-  process.exit(1);
-}
+const client = createDiscordClient();
 
 // ---- PERIODIC CLEANUP ----
-try {
-  logger.info("Setting up periodic cleanup...");
-  setInterval(async () => {
-    try {
-      // Clean up source mappings and disable expired buttons
-      await cleanupSourceMappings(client);
-      
-      // Perform storage cache cleanup
-      performCacheCleanup();
-      
-      const { storage } = require('./logger');
-      storage.debug("Periodic cleanup completed");
-    } catch (error) {
-      const { storage } = require('./logger');
-      storage.error("Periodic cleanup failed", { error: error.message });
-    }
-  }, config.server.cleanupIntervalMinutes * 60 * 1000);
-  logger.info("Periodic cleanup scheduled successfully");
-} catch (error) {
-  logger.fatal("Failed to setup periodic cleanup", { error: error.message, stack: error.stack });
-  process.exit(1);
-}
+setInterval(async () => {
+  // Clean up source mappings and disable expired buttons
+  await cleanupSourceMappings(client);
+  
+  // Perform storage cache cleanup
+  performCacheCleanup();
+  
+  const { storage } = require('./logger');
+  storage.debug("Periodic cleanup completed");
+}, config.server.cleanupIntervalMinutes * 60 * 1000);
 
 // ---- EVENT HANDLERS ----
-try {
-  logger.info("Setting up Discord event handlers...");
 
-  client.once("ready", async () => {
+client.once("ready", async () => {
   const { discord } = require('./logger');
   discord.info("Bot ready", { 
     botTag: client.user.tag,
@@ -180,21 +152,15 @@ client.on("shardReady", (shardId, unavailableGuilds) => {
   });
 });
 
-  client.on("shardDisconnect", (closeEvent, shardId) => {
-    const { discord } = require('./logger');
-    discord.warn("Discord shard disconnected", { shardId, closeEvent });
-  });
+client.on("shardDisconnect", (closeEvent, shardId) => {
+  const { discord } = require('./logger');
+  discord.warn("Discord shard disconnected", { shardId, closeEvent });
+});
 
-  client.on("shardReconnecting", shardId => {
-    const { discord } = require('./logger');
-    discord.info("Discord shard reconnecting", { shardId });
-  });
-
-  logger.info("Discord event handlers setup completed");
-} catch (error) {
-  logger.fatal("Failed to setup Discord event handlers", { error: error.message, stack: error.stack });
-  process.exit(1);
-}
+client.on("shardReconnecting", shardId => {
+  const { discord } = require('./logger');
+  discord.info("Discord shard reconnecting", { shardId });
+});
 
 // ---- LOGIN ----
 logger.info("Attempting to login to Discord");
