@@ -279,15 +279,39 @@ async function loginWithRetry(maxRetries = 3) {
   }
 }
 
-// Simple login - let Discord.js handle connection naturally
-console.log("DISCORD LOGIN: Starting simple login...");
-client.login(process.env.DISCORD_TOKEN)
+// Detailed login debugging
+console.log("DISCORD LOGIN: Token check - exists:", !!process.env.DISCORD_TOKEN);
+console.log("DISCORD LOGIN: Token length:", process.env.DISCORD_TOKEN?.length || 0);
+console.log("DISCORD LOGIN: Token starts with 'MT':", process.env.DISCORD_TOKEN?.startsWith('MT') || false);
+
+// Add comprehensive Discord event listeners for debugging
+client.on('debug', info => console.log('DISCORD DEBUG:', info));
+client.on('warn', warn => console.log('DISCORD WARN:', warn));
+client.on('error', error => console.log('DISCORD ERROR:', error));
+client.on('rateLimit', data => console.log('DISCORD RATE LIMIT:', data));
+client.on('invalidRequestWarning', data => console.log('DISCORD INVALID REQUEST:', data));
+
+// Add WebSocket connection events
+client.on('shardConnect', id => console.log('DISCORD SHARD CONNECT:', id));
+client.on('shardDisconnect', (event, id) => console.log('DISCORD SHARD DISCONNECT:', id, event));
+client.on('shardError', (error, id) => console.log('DISCORD SHARD ERROR:', id, error.message));
+client.on('shardReconnecting', id => console.log('DISCORD SHARD RECONNECTING:', id));
+client.on('shardReady', (id, unavailable) => console.log('DISCORD SHARD READY:', id, unavailable?.size || 0));
+client.on('shardResume', (id, replayed) => console.log('DISCORD SHARD RESUME:', id, replayed));
+
+// Try login with detailed logging
+console.log("DISCORD LOGIN: Starting login process...");
+const loginPromise = client.login(process.env.DISCORD_TOKEN);
+
+console.log("DISCORD LOGIN: Login promise created, setting up handlers...");
+
+loginPromise
   .then(() => {
-    console.log("DISCORD LOGIN: Login promise resolved");
+    console.log("DISCORD LOGIN: Login promise resolved successfully!");
     logger.info("Discord login initiated successfully");
   })
   .catch(error => {
-    console.error("DISCORD LOGIN: Login failed:", error);
+    console.error("DISCORD LOGIN: Login promise rejected with error:", error);
     logger.fatal("Discord login failed", { 
       error: error.message,
       code: error.code,
@@ -295,6 +319,21 @@ client.login(process.env.DISCORD_TOKEN)
     });
     process.exit(1);
   });
+
+// Add a timeout to see if login hangs
+setTimeout(() => {
+  console.log("DISCORD LOGIN: 60 second check - login still in progress...");
+}, 60000);
+
+setTimeout(() => {
+  console.log("DISCORD LOGIN: 120 second check - login appears to be hanging");
+  console.log("DISCORD CLIENT STATE:", {
+    readyTimestamp: client.readyTimestamp,
+    uptime: client.uptime,
+    user: client.user?.tag || 'not set',
+    guilds: client.guilds?.cache?.size || 0
+  });
+}, 120000);
 
 // ---- GRACEFUL SHUTDOWN ----
 async function gracefulShutdown(signal) {
