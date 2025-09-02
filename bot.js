@@ -279,7 +279,22 @@ async function loginWithRetry(maxRetries = 3) {
   }
 }
 
-loginWithRetry();
+// Simple login - let Discord.js handle connection naturally
+console.log("DISCORD LOGIN: Starting simple login...");
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => {
+    console.log("DISCORD LOGIN: Login promise resolved");
+    logger.info("Discord login initiated successfully");
+  })
+  .catch(error => {
+    console.error("DISCORD LOGIN: Login failed:", error);
+    logger.fatal("Discord login failed", { 
+      error: error.message,
+      code: error.code,
+      status: error.status
+    });
+    process.exit(1);
+  });
 
 // ---- GRACEFUL SHUTDOWN ----
 async function gracefulShutdown(signal) {
