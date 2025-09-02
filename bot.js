@@ -208,50 +208,31 @@ client.on("shardReady", (shardId, unavailableGuilds) => {
   process.exit(1);
 }
 
-// ---- LOGIN WITH RETRY LOGIC ----
-async function loginWithRetry(maxRetries = 3) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    logger.info("Attempting to login to Discord", { attempt, maxRetries });
-    console.log(`DISCORD LOGIN: Attempt ${attempt}/${maxRetries}`);
+// ---- LOGIN ----
+logger.info("Attempting to login to Discord");
+console.log("DISCORD LOGIN: Starting login process...");
 
-    try {
-      // Increase timeout for each retry
-      const timeout = 30000 + (attempt - 1) * 15000; // 30s, 45s, 60s
-      
-      const loginPromise = client.login(process.env.DISCORD_TOKEN);
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error(`Login timeout after ${timeout/1000}s`)), timeout);
-      });
+// Add timeout to detect hanging login
+const loginTimeout = setTimeout(() => {
+  console.error("DISCORD LOGIN: Login timed out after 30 seconds");
+  logger.error("Discord login timed out");
+  process.exit(1);
+}, 30000);
 
-      await Promise.race([loginPromise, timeoutPromise]);
-      
-      console.log("DISCORD LOGIN: Login successful!");
-      logger.info("Discord login successful");
-      return;
-
-    } catch (error) {
-      console.error(`DISCORD LOGIN: Attempt ${attempt} failed:`, error.message);
-      logger.error("Discord login attempt failed", { 
-        attempt,
-        error: error.message,
-        code: error.code 
-      });
-
-      if (attempt === maxRetries) {
-        console.error("DISCORD LOGIN: All login attempts failed");
-        logger.fatal("Discord login failed after all retries");
-        process.exit(1);
-      }
-
-      // Exponential backoff: wait before next attempt
-      const delay = Math.min(5000 * Math.pow(2, attempt - 1), 30000); // 5s, 10s, 20s (max 30s)
-      console.log(`DISCORD LOGIN: Waiting ${delay/1000}s before retry...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-}
-
-loginWithRetry();
+client.login(process.env.DISCORD_TOKEN).then(() => {
+  clearTimeout(loginTimeout);
+  console.log("DISCORD LOGIN: Login promise resolved successfully");
+  logger.info("Discord login initiated successfully");
+}).catch(error => {
+  clearTimeout(loginTimeout);
+  console.error("DISCORD LOGIN: Login failed with error:", error.message);
+  logger.error("Discord login failed", { 
+    error: error.message, 
+    stack: error.stack,
+    code: error.code 
+  });
+  process.exit(1);
+});
 
 // ---- GRACEFUL SHUTDOWN ----
 async function gracefulShutdown(signal) {
