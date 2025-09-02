@@ -5,13 +5,7 @@ const config = require('./config');
 const { queue: logger } = require('./logger');
 
 // ---- REDIS CONNECTION ----
-const redisConfig = process.env.REDIS_URL ? {
-  // Use Redis URL if provided (production)
-  maxRetriesPerRequest: null, // Required by BullMQ for blocking operations
-  lazyConnect: true,
-  enableOfflineQueue: false
-} : {
-  // Use individual config values (development)
+const redisConfig = {
   host: config.redis.host,
   port: config.redis.port,
   db: config.redis.db,
@@ -21,14 +15,7 @@ const redisConfig = process.env.REDIS_URL ? {
   enableOfflineQueue: false
 };
 
-logger.info("Redis connection configuration", { 
-  hasRedisUrl: !!process.env.REDIS_URL,
-  usingUrl: !!process.env.REDIS_URL
-});
-
-const redis = process.env.REDIS_URL ? 
-  new Redis(process.env.REDIS_URL, redisConfig) : 
-  new Redis(redisConfig);
+const redis = new Redis(redisConfig);
 
 // ---- QUEUE DEFINITIONS ----
 const queues = {

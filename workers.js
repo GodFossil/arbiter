@@ -18,13 +18,7 @@ const { isTrivialOrSafeMessage, isOtherBotCommand } = require('./filters');
 const { validateContradiction, SYSTEM_INSTRUCTIONS } = require('./detection');
 
 // ---- REDIS CONNECTION FOR WORKERS ----
-const redisConfig = process.env.REDIS_URL ? {
-  // Use Redis URL if provided (production)
-  maxRetriesPerRequest: null, // Required by BullMQ for blocking operations
-  lazyConnect: true,
-  enableOfflineQueue: false
-} : {
-  // Use individual config values (development)
+const redisConfig = {
   host: config.redis.host,
   port: config.redis.port,
   db: config.redis.db,
@@ -310,9 +304,7 @@ const workers = {};
  * @returns {Promise<void>}
  */
 async function startWorkers() {
-  const redis = process.env.REDIS_URL ? 
-    new Redis(process.env.REDIS_URL, redisConfig) : 
-    new Redis(redisConfig);
+  const redis = new Redis(redisConfig);
   
   // Contradiction detection worker
   workers.contradiction = new Worker(
