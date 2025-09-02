@@ -210,19 +210,35 @@ client.on("shardReady", (shardId, unavailableGuilds) => {
 
 // ---- LOGIN WITH RETRY LOGIC ----
 async function loginWithRetry(maxRetries = 3) {
+  // Check if token exists
+  if (!process.env.DISCORD_TOKEN) {
+    console.error("DISCORD LOGIN: No DISCORD_TOKEN found in environment");
+    logger.fatal("DISCORD_TOKEN environment variable is missing");
+    process.exit(1);
+  }
+  
+  console.log("DISCORD LOGIN: Token present, length:", process.env.DISCORD_TOKEN.length);
+  console.log("DISCORD LOGIN: Token prefix:", process.env.DISCORD_TOKEN.substring(0, 10) + "...");
+  
+  // Add initial delay to avoid rate limiting from previous attempts
+  console.log("DISCORD LOGIN: Waiting 60s to avoid rate limiting...");
+  await new Promise(resolve => setTimeout(resolve, 60000));
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     logger.info("Attempting to login to Discord", { attempt, maxRetries });
     console.log(`DISCORD LOGIN: Attempt ${attempt}/${maxRetries}`);
 
     try {
-      // Increase timeout for each retry
-      const timeout = 30000 + (attempt - 1) * 15000; // 30s, 45s, 60s
+      // Use consistent 90s timeout
+      const timeout = 90000;
+      console.log(`DISCORD LOGIN: Setting ${timeout/1000}s timeout`);
       
       const loginPromise = client.login(process.env.DISCORD_TOKEN);
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error(`Login timeout after ${timeout/1000}s`)), timeout);
       });
 
+      console.log("DISCORD LOGIN: Calling client.login()...");
       await Promise.race([loginPromise, timeoutPromise]);
       
       console.log("DISCORD LOGIN: Login successful!");
@@ -231,20 +247,32 @@ async function loginWithRetry(maxRetries = 3) {
 
     } catch (error) {
       console.error(`DISCORD LOGIN: Attempt ${attempt} failed:`, error.message);
+      console.error("DISCORD LOGIN: Error details:", {
+        name: error.name,
+        code: error.code,
+        status: error.status,
+        method: error.method,
+        url: error.url
+      });
+      
       logger.error("Discord login attempt failed", { 
         attempt,
         error: error.message,
-        code: error.code 
+        code: error.code,
+        name: error.name
       });
 
       if (attempt === maxRetries) {
         console.error("DISCORD LOGIN: All login attempts failed");
-        logger.fatal("Discord login failed after all retries");
+        logger.fatal("Discord login failed after all retries", {
+          finalError: error.message,
+          finalCode: error.code
+        });
         process.exit(1);
       }
 
-      // Exponential backoff: wait before next attempt
-      const delay = Math.min(5000 * Math.pow(2, attempt - 1), 30000); // 5s, 10s, 20s (max 30s)
+      // Wait longer between attempts
+      const delay = 120000; // 2 minutes between attempts
       console.log(`DISCORD LOGIN: Waiting ${delay/1000}s before retry...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
