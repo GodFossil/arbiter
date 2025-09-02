@@ -100,6 +100,7 @@ try {
   logger.info("Setting up Discord event handlers...");
 
   client.once("ready", async () => {
+  console.log("BOT READY EVENT FIRED");
   const { discord } = require('./logger');
   discord.info("Bot ready", { 
     botTag: client.user.tag,
@@ -109,17 +110,23 @@ try {
   
   // Initialize AI utilities with rate limiting
   try {
+    console.log("INITIALIZING AI UTILITIES...");
     await initializeAIUtils();
+    console.log("AI UTILITIES INITIALIZED");
     discord.info("AI utilities initialized successfully");
   } catch (e) {
+    console.error("AI UTILITIES FAILED:", e.message);
     discord.error("Failed to initialize AI utilities", { error: e.message });
   }
   
   // Start background workers for job processing
   try {
+    console.log("STARTING WORKERS...");
     await startWorkers();
+    console.log("WORKERS STARTED");
     discord.info("Background workers started successfully");
   } catch (error) {
+    console.error("WORKERS FAILED:", error.message);
     discord.error("Failed to start workers", { error: error.message });
     process.exit(1);
   }
@@ -127,11 +134,14 @@ try {
 
 client.on("messageCreate", async (msg) => {
   try {
+    console.log("MESSAGE RECEIVED:", msg.content.slice(0, 50), "from", msg.author.username);
     await handleMessageCreate(msg, client, botState);
   } catch (e) {
+    console.error("MESSAGE HANDLING ERROR:", e.message, e.stack);
     const { discord } = require('./logger');
     discord.error("Message handling failed", { 
       error: e.message,
+      stack: e.stack,
       userId: msg.author?.id,
       messageId: msg.id
     });
