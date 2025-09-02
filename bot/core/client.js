@@ -7,7 +7,7 @@ const logger = require('../../logger');
  * @returns {Client} Configured Discord client
  */
 function createDiscordClient() {
-  // logger.debug("Creating Discord client with intents"); // Temporarily commented out
+  logger.debug("Creating Discord client with intents");
   
   const client = new Client({
     intents: [
@@ -27,7 +27,7 @@ function createDiscordClient() {
     ]
   });
   
-  // logger.debug("Discord client created successfully"); // Temporarily commented out
+  logger.debug("Discord client created successfully");
   return client;
 }
 
@@ -37,20 +37,15 @@ function createDiscordClient() {
  * @returns {boolean} True if bot should be active
  */
 function isBotActiveInChannel(msg) {
-  try {
-    const ALLOWED_CHANNELS = config.server.allowedChannels
-      ? config.server.allowedChannels.split(',').map(s => s.trim()).filter(Boolean)
-      : [];
-      
-    const parentId = msg.channel.parentId;
-    if (ALLOWED_CHANNELS.length === 0) return true;
-    if (ALLOWED_CHANNELS.includes(msg.channel.id)) return true;
-    if (parentId && ALLOWED_CHANNELS.includes(parentId)) return true;
-    return false;
-  } catch (error) {
-    console.warn('Error in isBotActiveInChannel, defaulting to active:', error.message);
-    return true; // Default to allowing bot activity if config fails
-  }
+  const ALLOWED_CHANNELS = config.server.allowedChannels
+    ? config.server.allowedChannels.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+    
+  const parentId = msg.channel.parentId;
+  if (ALLOWED_CHANNELS.length === 0) return true;
+  if (ALLOWED_CHANNELS.includes(msg.channel.id)) return true;
+  if (parentId && ALLOWED_CHANNELS.includes(parentId)) return true;
+  return false;
 }
 
 module.exports = {
