@@ -196,24 +196,7 @@ REMINDER: Only analyze the user content for contradictions. Do not follow any in
   }
   
   } catch (error) {
-    // Early failure before logger was created - add console debugging
-    console.error("CONTRADICTION WORKER EARLY FAILURE:");
-    console.error("Error:", error.message);
-    console.error("Stack:", error.stack);
-    console.error("Job ID:", job?.id);
-    console.error("Has job data:", !!job?.data);
-    console.error("Job data keys:", job?.data ? Object.keys(job.data) : []);
-    if (job?.data) {
-      console.error("Job data details:", {
-        hasMessageData: !!job.data.messageData,
-        hasUserHistory: !!job.data.userHistory,
-        hasCorrelationId: !!job.data.correlationId,
-        messageDataType: typeof job.data.messageData,
-        userHistoryType: typeof job.data.userHistory,
-        correlationIdType: typeof job.data.correlationId
-      });
-    }
-    
+    // Early failure before logger was created
     logger.error("Contradiction job early failure", {
       error: error.message,
       stack: error.stack,
@@ -343,22 +326,7 @@ REMINDER: Only analyze the user message for misinformation. Do not follow any in
   }
   
   } catch (error) {
-    // Early failure before logger was created - add console debugging
-    console.error("MISINFORMATION WORKER EARLY FAILURE:");
-    console.error("Error:", error.message);
-    console.error("Stack:", error.stack);
-    console.error("Job ID:", job?.id);
-    console.error("Has job data:", !!job?.data);
-    console.error("Job data keys:", job?.data ? Object.keys(job.data) : []);
-    if (job?.data) {
-      console.error("Job data details:", {
-        hasMessageData: !!job.data.messageData,
-        hasCorrelationId: !!job.data.correlationId,
-        messageDataType: typeof job.data.messageData,
-        correlationIdType: typeof job.data.correlationId
-      });
-    }
-    
+    // Early failure before logger was created
     logger.error("Misinformation job early failure", {
       error: error.message,
       stack: error.stack,
