@@ -3,8 +3,6 @@
  * Provides context-aware logical principles and reasoning enhancement
  */
 
-const logger = require('./logger');
-
 // Core logical laws and principles
 const FOUNDATIONAL_LOGIC = {
   nonContradiction: {
@@ -137,8 +135,7 @@ const CONTEXT_FRAMEWORKS = {
  * @returns {string} Formatted logical principles for prompt injection
  */
 function getLogicalContext(contextType = 'general') {
-  const log = logger.child({ component: 'logic' });
-  log.debug("Building reasoning framework", { contextType });
+  console.log(`[LOGIC] Building ${contextType} reasoning framework`);
   
   const framework = CONTEXT_FRAMEWORKS[contextType] || CONTEXT_FRAMEWORKS.general;
   
@@ -192,10 +189,7 @@ function getLogicalContext(contextType = 'general') {
     output += `Informal: ${FALLACY_DETECTION.informal.join(', ')}\n\n`;
   }
   
-  log.debug("Generated reasoning framework", { 
-    lines: output.split('\n').length,
-    contextType
-  });
+  console.log(`[LOGIC] Generated ${output.split('\n').length} lines of reasoning framework`);
   return output.trim();
 }
 

@@ -17,41 +17,13 @@ const { handleInteractionCreate } = require("./bot/events/interactionCreate");
 const { cleanupSourceMappings } = require("./bot/ui/components");
 const { performCacheCleanup } = require("./storage");
 const { initializeAIUtils } = require("./ai-utils");
-const { startWorkers } = require('./workers');
-const { getQueueStatus } = require('./queue');
 
 logger.info("All modules loaded successfully");
-
-// ---- GLOBAL ERROR HANDLERS ----
-process.on('unhandledRejection', (reason, promise) => {
-  logger.fatal('Unhandled Rejection at Promise', { 
-    reason: reason?.message || reason,
-    stack: reason?.stack,
-    promise: promise.toString()
-  });
-  gracefulShutdown('UNHANDLED_REJECTION');
-});
-
-process.on('uncaughtException', (error) => {
-  logger.fatal('Uncaught Exception thrown', { 
-    error: error.message,
-    stack: error.stack
-  });
-  gracefulShutdown('UNCAUGHT_EXCEPTION');
-});
 
 // ---- KEEPALIVE SERVER ----
 const app = express();
 const PORT = config.server.port;
 app.get('/', (_req, res) => res.send('Arbiter - OK'));
-app.get('/status', async (_req, res) => {
-  try {
-    const queueStatus = await getQueueStatus();
-    res.json({ status: 'OK', queues: queueStatus });
-  } catch (error) {
-    res.status(500).json({ status: 'ERROR', error: error.message });
-  }
-});
 app.listen(PORT, () => logger.info("Keepalive server started", { port: PORT }));
 
 // ---- DISCORD CLIENT SETUP ----
@@ -85,15 +57,6 @@ client.once("ready", async () => {
     discord.info("AI utilities initialized successfully");
   } catch (e) {
     discord.error("Failed to initialize AI utilities", { error: e.message });
-  }
-  
-  // Start background workers for job processing
-  try {
-    await startWorkers();
-    discord.info("Background workers started successfully");
-  } catch (error) {
-    discord.error("Failed to start workers", { error: error.message });
-    process.exit(1);
   }
 });
 
@@ -172,30 +135,14 @@ client.login(process.env.DISCORD_TOKEN).then(() => {
 });
 
 // ---- GRACEFUL SHUTDOWN ----
-async function gracefulShutdown(signal) {
-  logger.info(`Received ${signal} - graceful shutdown initiated`);
-  
-  try {
-    // Stop workers first
-    const { stopWorkers } = require('./workers');
-    await stopWorkers();
-    logger.info('Workers stopped successfully');
-    
-    // Close queue connections
-    const { closeQueues } = require('./queue');
-    await closeQueues();
-    logger.info('Queue connections closed');
-    
-    // Destroy Discord client
-    client.destroy();
-    logger.info('Discord client destroyed');
-    
-  } catch (error) {
-    logger.error('Error during shutdown', { error: error.message });
-  }
-  
+process.on('SIGINT', () => {
+  logger.info('Received SIGINT - graceful shutdown initiated');
+  client.destroy();
   process.exit(0);
-}
+});
 
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGTERM', () => {
+  logger.info('Received SIGTERM - graceful shutdown initiated');
+  client.destroy();
+  process.exit(0);
+});

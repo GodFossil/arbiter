@@ -1,13 +1,12 @@
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const config = require('../../config');
-const logger = require('../../logger');
 
 /**
  * Create and configure Discord client with all necessary intents
  * @returns {Client} Configured Discord client
  */
 function createDiscordClient() {
-  logger.debug("Creating Discord client with intents");
+  console.log("[DEBUG] Creating Discord client with intents...");
   
   const client = new Client({
     intents: [
@@ -27,7 +26,7 @@ function createDiscordClient() {
     ]
   });
   
-  logger.debug("Discord client created successfully");
+  console.log("[DEBUG] Discord client created successfully");
   return client;
 }
 

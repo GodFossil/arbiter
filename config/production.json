@@ -19,35 +19,6 @@
     "aiConcurrency": 5,
     "exaConcurrency": 3
   },
-  "redis": {
-    "host": "localhost",
-    "port": 6379,
-    "db": 1,
-    "maxRetriesPerRequest": 5,
-    "retryDelayOnFailover": 200
-  },
-  "queues": {
-    "contradiction": {
-      "concurrency": 3,
-      "removeOnComplete": 20,
-      "removeOnFail": 50
-    },
-    "misinformation": {
-      "concurrency": 3,
-      "removeOnComplete": 20,
-      "removeOnFail": 50
-    },
-    "summarization": {
-      "concurrency": 2,
-      "removeOnComplete": 10,
-      "removeOnFail": 20
-    },
-    "userReply": {
-      "concurrency": 5,
-      "removeOnComplete": 20,
-      "removeOnFail": 50
-    }
-  },
   "logging": {
     "level": "info",
     "enableCorrelationIds": true,
