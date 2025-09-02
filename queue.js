@@ -9,7 +9,7 @@ const redisConfig = {
   host: config.redis.host,
   port: config.redis.port,
   db: config.redis.db,
-  maxRetriesPerRequest: null, // Required by BullMQ for blocking operations
+  maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
   retryDelayOnFailover: config.redis.retryDelayOnFailover,
   lazyConnect: true,
   enableOfflineQueue: false
