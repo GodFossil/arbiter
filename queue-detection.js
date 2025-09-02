@@ -16,7 +16,7 @@ const USE_LOGICAL_PRINCIPLES = config.detection.logicalPrinciplesEnabled;
  * @returns {Promise<object>} Object with job promises for contradiction and misinformation
  */
 async function detectContradictionOrMisinformationQueued(msg, useLogicalPrinciples = USE_LOGICAL_PRINCIPLES, correlationId) {
-  const log = require('./logger').createCorrelatedLogger(correlationId, { component: 'queue-detection' });
+  const log = require('./logger').createCorrelatedLogger(require('./logger').queue, correlationId, 'queue-detection');
   
   log.debug("Starting queued detection", { 
     messageId: msg.id,
