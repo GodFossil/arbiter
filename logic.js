@@ -3,7 +3,7 @@
  * Provides context-aware logical principles and reasoning enhancement
  */
 
-const logger = require('./logger');
+const { logic: logger } = require('./logger');
 
 // Core logical laws and principles
 const FOUNDATIONAL_LOGIC = {
