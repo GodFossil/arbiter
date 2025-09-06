@@ -68,7 +68,7 @@ if (config.security.enableRateLimit) {
 }
 
 // Health check endpoint
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.json({ 
     status: 'OK', 
     service: 'Arbiter',
