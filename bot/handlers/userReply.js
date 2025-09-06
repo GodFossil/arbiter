@@ -33,7 +33,7 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     log.debug("Current message saved", { messageId: thisMsgId });
     
     // Fetch conversation context
-    const context = await fetchConversationContext(msg, client, thisMsgId);
+    const context = await fetchConversationContext(msg, thisMsgId);
     if (!context) {
       log.warn("Insufficient message history for reply");
       try {
@@ -123,7 +123,7 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
 /**
  * Fetch conversation context (user and channel history)
  */
-async function fetchConversationContext(msg, client, thisMsgId = null) {
+async function fetchConversationContext(msg, thisMsgId = null) {
   
   // Use fallback logger if none provided
   const log = logger || require('../../logger').createCorrelatedLogger(

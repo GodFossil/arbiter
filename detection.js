@@ -5,13 +5,12 @@ const {
   contradictionValidationCache,
   fetchUserMessagesForDetection
 } = require("./storage");
-const { TRIVIAL_PATTERNS, isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
+const { isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
 const { 
   sanitizeUserContent, 
   sanitizeUserMessages, 
   SANITIZATION_INSTRUCTIONS,
-  safeAIResponse,
-  truncateForLogging
+  safeAIResponse
 } = require("./security");
 const config = require('./config');
 

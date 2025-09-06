@@ -1,4 +1,4 @@
-const config = require('./config');
+
 
 /**
  * Security utilities for handling user input in LLM prompts

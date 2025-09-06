@@ -1,7 +1,7 @@
 const { detectContradictionOrMisinformation } = require("../../detection");
 const { isTrivialOrSafeMessage, isOtherBotCommand } = require("../../filters");
 const { replyWithSourcesButton } = require("../ui/components");
-const { truncateMessage, formatCombinedDetectionResult } = require("../ui/formatting");
+const { truncateMessage } = require("../ui/formatting");
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const config = require('../../config');
 
