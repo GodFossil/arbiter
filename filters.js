@@ -79,10 +79,18 @@ function isTrivialOrSafeMessage(content) {
   if (trimmed.length < 4) return true;
   if (trimmed.length > 200) return false; // Long messages are likely substantive
   
+  // Strip mentions to check the actual content for triviality
+  const withoutMentions = trimmed.replace(/<@!?\d+>/g, '').trim();
+  
   const lower = trimmed.toLowerCase();
+  const lowerWithoutMentions = withoutMentions.toLowerCase();
   
   // Check cached safe words first (O(1) lookup, most common case)
   if (TRIVIAL_PATTERNS.safe.has(lower)) return true;
+  
+  // Check content without mentions for triviality (e.g., "@bot hello" -> "hello")
+  if (TRIVIAL_PATTERNS.safe.has(lowerWithoutMentions)) return true;
+  if (withoutMentions.length <= 3) return true; // Very short after removing mentions
   
   // Pre-check for common patterns to avoid expensive regex
   const firstChar = lower[0];

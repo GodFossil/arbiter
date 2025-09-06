@@ -64,9 +64,11 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
       responseLength: result.length
     });
     
-    // ==== Source-gathering logic for non-news answers ====
+    // ==== Source-gathering logic for non-news answers (skip for trivial messages) ====
     let allSources = [...(newsData.sources || [])];
-    if (allSources.length === 0) {
+    const isTrivialMessage = isTrivialOrSafeMessage(msg.content);
+    
+    if (allSources.length === 0 && !isTrivialMessage) {
       try {
         log.debug("No news sources found, trying exaAnswer for general sources");
         const exaRes = await exaAnswer(msg.content);
@@ -77,13 +79,15 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
       } catch (e) {
         log.warn("exaAnswer failed", { error: e.message });
       }
+    } else if (isTrivialMessage) {
+      log.debug("Skipping source gathering for trivial message");
     }
     
     // Prepare final reply with detection integration
     const finalReply = integrateDetectionIntoReply(result, detectionResults, state);
     
-    // Add detection sources if available
-    if (detectionResults && state.DETECTION_ENABLED) {
+    // Add detection sources if available (but not for trivial messages)
+    if (detectionResults && state.DETECTION_ENABLED && !isTrivialMessage) {
       if (detectionResults.misinformation && detectionResults.misinformation.url) {
         allSources.push(detectionResults.misinformation.url);
       }

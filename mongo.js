@@ -90,7 +90,12 @@ async function createIndexes(db) {
     
     logger.info("Performance indexes created successfully");
   } catch (error) {
-    logger.warn("Index creation warning", { error: error.message });
+    // Only warn for actual problems, not "index already exists" errors
+    if (!error.message.includes('already exists')) {
+      logger.warn("Index creation warning", { error: error.message });
+    } else {
+      logger.debug("Indexes already exist - skipping creation");
+    }
   }
 }
 
