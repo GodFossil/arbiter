@@ -8,6 +8,35 @@ const { getLogicalContext } = require("../../logic");
 const { sanitizeUserContent, SANITIZATION_INSTRUCTIONS } = require("../../security");
 
 /**
+ * Detect if a message is asking a question vs making a statement
+ * @param {string} content - Message content
+ * @returns {boolean} True if content appears to be a question
+ */
+function isQuestion(content) {
+  if (!content) return false;
+  
+  const trimmed = content.trim().toLowerCase();
+  
+  // Strip mentions to check actual content
+  const withoutMentions = trimmed.replace(/<@!?\d+>/g, '').trim();
+  
+  // Obvious question markers
+  if (withoutMentions.endsWith('?')) return true;
+  
+  // Question words at the beginning
+  const questionStarters = [
+    'what', 'who', 'when', 'where', 'why', 'how', 'which', 'whose', 'whom',
+    'is', 'are', 'can', 'could', 'would', 'should', 'will', 'do', 'does', 'did',
+    'has', 'have', 'was', 'were'
+  ];
+  
+  const words = withoutMentions.split(/\s+/);
+  const firstWord = words[0];
+  
+  return questionStarters.includes(firstWord);
+}
+
+/**
  * Generate and send user-facing reply when bot is mentioned or replied to
  * @param {Message} msg - Discord message object
  * @param {Client} client - Discord client instance
@@ -67,17 +96,32 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     // ==== Source-gathering logic for non-news answers (skip for trivial messages) ====
     let allSources = [...(newsData.sources || [])];
     const isTrivialMessage = isTrivialOrSafeMessage(msg.content);
+    const isQuestionMessage = isQuestion(msg.content);
     
     if (allSources.length === 0 && !isTrivialMessage) {
       try {
-        log.debug("No news sources found, trying exaAnswer for general sources");
-        const exaRes = await exaAnswer(msg.content);
-        if (exaRes && exaRes.urls && exaRes.urls.length) {
-          allSources = exaRes.urls;
-          log.info("Found sources via exaAnswer", { sourceCount: allSources.length });
+        if (isQuestionMessage) {
+          // Use exaAnswer for questions to get direct answers with sources
+          log.debug("Question detected, using exaAnswer for direct answer");
+          const exaRes = await exaAnswer(msg.content);
+          if (exaRes && exaRes.urls && exaRes.urls.length) {
+            allSources = exaRes.urls;
+            log.info("Found sources via exaAnswer", { sourceCount: allSources.length });
+          }
+        } else {
+          // Use exaSearch for statements to get related sources without irrelevant answers
+          log.debug("Statement detected, using exaSearch for related sources");
+          const searchRes = await exaSearch(msg.content);
+          if (searchRes && searchRes.length) {
+            allSources = searchRes.map(r => r.url);
+            log.info("Found sources via exaSearch", { sourceCount: allSources.length });
+          }
         }
       } catch (e) {
-        log.warn("exaAnswer failed", { error: e.message });
+        log.warn("Source gathering failed", { 
+          error: e.message,
+          method: isQuestionMessage ? 'exaAnswer' : 'exaSearch'
+        });
       }
     } else if (isTrivialMessage) {
       log.debug("Skipping source gathering for trivial message");

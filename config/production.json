@@ -23,6 +23,6 @@
     "level": "info",
     "enableCorrelationIds": true,
     "enablePerformanceTracking": true,
-    "useSimpleFormat": false
+    "useSimpleFormat": true
   }
 }

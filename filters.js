@@ -26,7 +26,8 @@ const TRIVIAL_PATTERNS = {
     "brb", "ttyl", "gtg", "omg", "wtf", "tbh", "imo", "ngl", "fr", "bet", "facts", "cap",
     "no cap", "word", "mood", "same", "this", "that", "what", "who", "when", "where", "why",
     "rip", "f", "oof", "yikes", "cringe", "based", "ratio", "w", "l", "cope", "seethe",
-    "touch grass", "skill issue", "imagine", "sus", "among us", "poggers", "sheesh", "bussin"
+    "touch grass", "skill issue", "imagine", "sus", "among us", "poggers", "sheesh", "bussin",
+    "talk to me", "test", "testing", "help me", "tell me", "show me", "explain", "describe"
   ]),
   
   // Compiled regex patterns for better performance

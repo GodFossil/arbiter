@@ -31,19 +31,28 @@ const useSimpleFormat = config.logging?.useSimpleFormat || process.env.SIMPLE_LO
 const logger = pino({
   level: getLogLevel(),
   timestamp: pino.stdTimeFunctions.isoTime,
-  ...(process.env.NODE_ENV !== 'production' && {
+  // Apply simple format regardless of environment if configured
+  ...(useSimpleFormat && {
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        colorize: false, // No colors in production logs
+        translateTime: false, // No timestamps in simple mode
+        ignore: 'pid,hostname,time,level,correlationId,userId,username,guildId,channelId,messageId,component',
+        messageFormat: '{msg}',
+        hideObject: true
+      }
+    }
+  }),
+  // Apply structured pretty format for development (non-simple mode)
+  ...(!useSimpleFormat && process.env.NODE_ENV !== 'production' && {
     transport: {
       target: 'pino-pretty',
       options: {
         colorize: true,
-        translateTime: useSimpleFormat ? false : 'SYS:standard',
-        ignore: useSimpleFormat 
-          ? 'pid,hostname,time,level,correlationId,userId,username,guildId,channelId,messageId,component' 
-          : 'pid,hostname',
-        messageFormat: useSimpleFormat 
-          ? '{msg}' 
-          : '{component} | {msg}',
-        hideObject: useSimpleFormat
+        translateTime: 'SYS:standard',
+        ignore: 'pid,hostname',
+        messageFormat: '{component} | {msg}'
       }
     }
   })

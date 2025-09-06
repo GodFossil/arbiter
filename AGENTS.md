@@ -28,7 +28,8 @@ Arbiter is an advanced Discord bot designed for The Debate Server that monitors 
 - **MAJOR** (X.x.x): Breaking changes, config format changes, database schema changes, API changes
 
 ### Version History:
-- **v1.2.0** (Current): Added configurable simple logging format for better development readability - clean messages instead of verbose JSON
+- **v1.3.0** (Current): Enhanced trivial message detection, smart Exa usage (exaAnswer for questions, exaSearch for statements), enabled simple logging in production
+- **v1.2.0**: Added configurable simple logging format for better development readability - clean messages instead of verbose JSON
 - **v1.1.2**: Fixed unnecessary Exa queries and source buttons for trivial messages like greetings, improved MongoDB index logging
 - **v1.1.1**: Fixed ReferenceError in user-facing reply handler causing bot mentions to fail, improved error logging
 - **v1.1.0**: Major refactor with security enhancements, performance optimizations, prompt injection fixes, resource leak fixes, and architecture improvements
