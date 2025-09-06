@@ -66,10 +66,18 @@ async function handleMessageCreate(msg, client, state) {
   // ---- USER-FACING REPLIES ----
   if (isUserFacingTrigger) {
     logger.info("Handling user-facing reply", { isMentioned, isReplyToBot });
-    await handleUserFacingReply(msg, client, state, detectionResults, logger);
+    try {
+      await handleUserFacingReply(msg, client, state, detectionResults, logger);
+    } catch (err) {
+      logger.error("User-facing reply handler failed", { 
+        error: err?.message || 'Unknown error',
+        errorType: err?.constructor?.name || 'Unknown',
+        stack: err?.stack
+      });
+    }
   }
   
-  logger.debug("Message processing completed");
+  logger.info("Message processing completed");
 }
 
 module.exports = {

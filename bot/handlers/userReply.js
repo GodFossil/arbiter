@@ -111,12 +111,16 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
     
   } catch (err) {
     log.error("User-facing reply failed", { 
-      error: err.message,
-      stack: err.stack
+      error: err?.message || 'Unknown error',
+      errorType: err?.constructor?.name || 'Unknown',
+      stack: err?.stack,
+      fullError: err
     });
     try {
       await msg.reply("Nobody will help you.");
-    } catch {}
+    } catch (replyErr) {
+      log.error("Failed to send error reply", { error: replyErr?.message });
+    }
   }
 }
 
@@ -125,8 +129,8 @@ async function handleUserFacingReply(msg, client, state, detectionResults = null
  */
 async function fetchConversationContext(msg, thisMsgId = null) {
   
-  // Use fallback logger if none provided
-  const log = logger || require('../../logger').createCorrelatedLogger(
+  // Create logger for this function
+  const log = require('../../logger').createCorrelatedLogger(
     require('../../logger').generateCorrelationId(),
     { userId: msg.author.id, component: 'fetchContext' }
   );
