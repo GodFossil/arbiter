@@ -62,5 +62,15 @@
     "level": "debug",
     "enableCorrelationIds": true,
     "enablePerformanceTracking": true
+  },
+  "security": {
+    "enableRateLimit": true,
+    "enableHelmet": true,
+    "enableSecureLogging": true,
+    "rateLimit": {
+      "windowMs": 60000,
+      "max": 100,
+      "message": "Too many requests"
+    }
   }
 }

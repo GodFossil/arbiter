@@ -6,6 +6,13 @@ const {
   fetchUserMessagesForDetection
 } = require("./storage");
 const { TRIVIAL_PATTERNS, isOtherBotCommand, isTrivialOrSafeMessage } = require("./filters");
+const { 
+  sanitizeUserContent, 
+  sanitizeUserMessages, 
+  SANITIZATION_INSTRUCTIONS,
+  safeAIResponse,
+  truncateForLogging
+} = require("./security");
 const config = require('./config');
 
 // ---- TUNEABLE PARAMETERS ----
@@ -176,6 +183,7 @@ async function detectContradictionOrMisinformation(msg, useLogicalPrinciples = U
   const priorSubstantive = userMessages.filter(m => !isTrivialOrSafeMessage(m.content));
   
   // Duplicate detection: skip contradiction check for duplicates, but still check misinformation
+  // priorSubstantive[0] is the most recent message (fetchUserMessagesForDetection sorts by ts: -1)
   console.log(`[DEBUG] Recent message history (last 5):`, priorSubstantive.slice(0, 5).map(m => m.content));
   const isDuplicate = priorSubstantive.length && priorSubstantive[0].content.trim() === msg.content.trim();
   if (isDuplicate) {
@@ -210,6 +218,7 @@ async function detectContradictionOrMisinformation(msg, useLogicalPrinciples = U
     } else {
       const contradictionPrompt = `
 ${SYSTEM_INSTRUCTIONS}
+${SANITIZATION_INSTRUCTIONS}
 
 ${useLogicalPrinciples ? getLogicalContext('contradiction', { contentAnalysis: contradictionContentAnalysis }) : ''}
 
@@ -221,23 +230,24 @@ CONTENT ANALYSIS FOR CONTRADICTION CHECK:
 - Temporal markers: ${contradictionContentAnalysis.hasTemporal ? 'PRESENT (views may have evolved)' : 'ABSENT'}
 - Claim type: ${contradictionContentAnalysis.hasAbsolutes ? 'ABSOLUTE' : 'QUALIFIED'}
 ${contradictionContentAnalysis.recommendations.length > 0 ? '\nANALYSIS NOTES:\n' + contradictionContentAnalysis.recommendations.map(r => `• ${r}`).join('\n') : ''}
-Does [Current message] logically contradict any statement in [Prior messages] from the same user?
+
+Does the current user message logically contradict any statement in their prior messages?
 IMPORTANT: This is NOT about disagreements, evolving opinions, or clarifications. This is about direct logical contradictions where the user is simultaneously asserting P and NOT P about the same subject.
+
 Always reply in strict JSON of the form:
 {"contradiction":"yes"|"no", "reason":"...", "evidence":"..."}
 - "contradiction": Use "yes" ONLY if there is a clear logical contradiction where the user now asserts the exact opposite of what they previously stated about the same topic. Use "no" for: evolving opinions, new information, clarifications, different aspects of a topic, uncertain statements, hypotheticals, or any statement that doesn't directly negate a prior claim.
 - "reason": For "yes", explain the specific logical contradiction. For "no", explain why: e.g. different topics, opinion evolution, uncertainty, or no actual contradiction.
-- "evidence": For "yes", quote the EXACT contradicting statement from [Prior messages] (not a paraphrase). For "no", use an empty string.
+- "evidence": For "yes", quote the EXACT contradicting statement from prior messages (not a paraphrase). For "no", use an empty string.
 In all cases, never reply with non-JSON or leave any field out. If there's no contradiction, respond "contradiction":"no".
-[Current message]
-${msg.content}
-[Prior messages]
-${concatenated}
+
+${sanitizeUserContent(msg.content, "CURRENT_MESSAGE")}
+${sanitizeUserMessages(priorSubstantive, "PRIOR_MESSAGES")}
 `;
       console.log(`[DEBUG] Sending contradiction check prompt (length: ${contradictionPrompt.length})`);
       try {
         const { result } = await aiFlash(contradictionPrompt);
-        console.log(`[DEBUG] AI flash response:`, result);
+        console.log(`[DEBUG] AI flash response:`, safeAIResponse(result));
         let parsed = null;
         try {
           const match = result.match(/\{[\s\S]*?\}/);
@@ -336,6 +346,7 @@ ${concatenated}
   
   const misinfoPrompt = `
 ${SYSTEM_INSTRUCTIONS}
+${SANITIZATION_INSTRUCTIONS}
 
 ${useLogicalPrinciples ? getLogicalContext('misinformation', { contentAnalysis: misinfoContentAnalysis }) : ''}
 
@@ -346,8 +357,10 @@ CONTENT ANALYSIS FOR FACT-CHECKING:
 - Evidence backing: ${misinfoContentAnalysis.hasEvidence ? 'SOME PROVIDED' : 'NONE PROVIDED'}
 - Claim type: ${misinfoContentAnalysis.hasAbsolutes ? 'ABSOLUTE' : 'QUALIFIED'}
 ${misinfoContentAnalysis.recommendations.length > 0 ? '\nANALYSIS NOTES:\n' + misinfoContentAnalysis.recommendations.map(r => `• ${r}`).join('\n') : ''}
-Does the [User message] contain dangerous misinformation that the user is personally making, asserting, or endorsing according to the [Web context]?
+
+Does the user message contain dangerous misinformation that the user is personally making, asserting, or endorsing according to the web context provided?
 IMPORTANT: Only flag messages where the user is directly claiming or promoting false information. Do NOT flag messages where the user is merely reporting what others say, expressing uncertainty, rejecting false claims, or discussing misinformation without endorsing it.
+
 Always reply in strict JSON of the form:
 {"misinformation":"yes"|"no", "reason":"...", "evidence":"...", "url":"..."}
 - "misinformation": Use "yes" ONLY if the user is personally asserting/claiming/endorsing CRITICAL misinformation that is:
@@ -360,10 +373,9 @@ Always reply in strict JSON of the form:
 - "evidence": For "yes", provide the most direct quote or summary from the web context that falsifies the harmful claim. For "no", use an empty string.
 - "url": For "yes", include the URL that contains the corroborating source material. For "no", use an empty string.
 In all cases, never reply with non-JSON or leave any field out. If you can't find suitable evidence or the claim isn't critically harmful, respond "misinformation":"no".
-[User message]
-${msg.content}
-[Web context]
-${answer.answer}
+
+${sanitizeUserContent(msg.content, "USER_MESSAGE")}
+${sanitizeUserContent(answer.answer, "WEB_CONTEXT")}
 `.trim();
   try {
     const { result } = await aiFactCheckFlash(misinfoPrompt);

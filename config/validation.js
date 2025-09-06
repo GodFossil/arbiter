@@ -74,17 +74,43 @@ const configSchema = Joi.object({
     level: Joi.string().valid('debug', 'info', 'warn', 'error', 'silent').required(),
     enableCorrelationIds: Joi.boolean().required(),
     enablePerformanceTracking: Joi.boolean().required()
+  }).required(),
+
+  security: Joi.object({
+    enableRateLimit: Joi.boolean().required(),
+    enableHelmet: Joi.boolean().required(),
+    enableSecureLogging: Joi.boolean().required(),
+    rateLimit: Joi.object({
+      windowMs: Joi.number().integer().min(1000).max(3600000).required(),
+      max: Joi.number().integer().min(1).max(10000).required(),
+      message: Joi.string().required()
+    }).required()
   }).required()
 });
 
 // Environment variables validation schema
 const envSchema = Joi.object({
-  DISCORD_TOKEN: Joi.string().required(),
-  DO_AI_API_KEY: Joi.string().required(),
-  MONGODB_URI: Joi.string().uri().required(),
-  EXA_API_KEY: Joi.string().required(),
-  PORT: Joi.string().optional(),
-  ALLOWED_CHANNELS: Joi.string().optional()
+  DISCORD_TOKEN: Joi.string().min(50).required().messages({
+    'string.min': 'DISCORD_TOKEN must be at least 50 characters long',
+    'any.required': 'DISCORD_TOKEN is required'
+  }),
+  DO_AI_API_KEY: Joi.string().min(10).required().messages({
+    'string.min': 'DO_AI_API_KEY must be at least 10 characters long',
+    'any.required': 'DO_AI_API_KEY is required'
+  }),
+  MONGODB_URI: Joi.string().uri().required().messages({
+    'string.uri': 'MONGODB_URI must be a valid URI',
+    'any.required': 'MONGODB_URI is required'
+  }),
+  EXA_API_KEY: Joi.string().min(10).required().messages({
+    'string.min': 'EXA_API_KEY must be at least 10 characters long',
+    'any.required': 'EXA_API_KEY is required'
+  }),
+  PORT: Joi.string().pattern(/^\d+$/).optional().messages({
+    'string.pattern.base': 'PORT must be a valid port number'
+  }),
+  ALLOWED_CHANNELS: Joi.string().optional(),
+  NODE_ENV: Joi.string().valid('development', 'production', 'test').optional()
 }).unknown(true); // Allow unknown environment variables (platform-specific vars like KUBERNETES_SERVICE_PORT_HTTPS)
 
 /**

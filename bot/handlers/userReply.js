@@ -5,6 +5,7 @@ const { truncateMessage, getDisplayName } = require("../ui/formatting");
 const { aiUserFacing } = require("../../ai");
 const { exaSearch, exaAnswer, cleanUrl } = require("../../ai-utils");
 const { getLogicalContext } = require("../../logic");
+const { sanitizeUserContent, SANITIZATION_INSTRUCTIONS } = require("../../security");
 
 /**
  * Generate and send user-facing reply when bot is mentioned or replied to
@@ -241,6 +242,7 @@ function buildUserReplyPrompt(msg, context, newsData, detectionResults, state, c
   
   return `
 ${logicalContext}
+${SANITIZATION_INSTRUCTIONS}
 
 You are responding to a message in The Debate Server Discord community on ${dateString}.
 
@@ -250,7 +252,7 @@ ${userHistory || "No recent messages available"}
 **Channel Conversation History:**
 ${channelHistory || "No conversation history available"}
 
-**Current User Message:** "${msg.content}"
+${sanitizeUserContent(msg.content, "CURRENT_USER_MESSAGE")}
 ${newsData.newsSection}
 
 ${detectionResults ? buildDetectionContext(detectionResults) : ""}

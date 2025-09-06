@@ -2,6 +2,7 @@ const { connect, resetDatabase } = require("./mongo");
 const { isTrivialOrSafeMessage } = require("./filters");
 const config = require('./config');
 const { storage: logger } = require('./logger');
+const { sanitizeUserMessages, SANITIZATION_INSTRUCTIONS } = require('./security');
 
 // ---- LRU CACHE IMPLEMENTATION ----
 class LRUCache {
@@ -58,9 +59,13 @@ class LRUCache {
     userMessages.unshift(msg);
     channelMessages.unshift(msg);
     
-    // Keep only the most recent N messages
-    userMessages = userMessages.slice(0, 20); // Keep 20 user messages
-    channelMessages = channelMessages.slice(0, 50); // Keep 50 channel messages
+    // Efficiently truncate to keep only recent messages (avoid slice copying)
+    if (userMessages.length > 20) {
+      userMessages.length = 20; // Truncate in-place, much faster than slice
+    }
+    if (channelMessages.length > 50) {
+      channelMessages.length = 50; // Truncate in-place, much faster than slice
+    }
     
     // Update cache
     this.set(userKey, userMessages);
@@ -70,15 +75,35 @@ class LRUCache {
 
 // ---- CACHE INSTANCES ----
 const messageCache = new LRUCache(config.cache.maxMessageCacheSize); // Cache up to configured number of query results
-const contentAnalysisCache = new Map(); // Cache content analysis results
-const contradictionValidationCache = new Map(); // Cache validation results
+const contentAnalysisCache = new LRUCache(config.cache.maxAnalysisCacheSize); // Cache content analysis results with bounded size
+const contradictionValidationCache = new LRUCache(config.cache.maxValidationCacheSize); // Cache validation results with bounded size
+
+// ---- PERFORMANCE OPTIMIZATION - CHANNEL MESSAGE COUNTERS ----
+// In-memory counters to avoid expensive DB count operations
+const channelMessageCounters = new Map(); // channelKey -> { count, lastUpdated }
+
+function getChannelKey(channelId, guildId) {
+  return `${guildId}:${channelId}`;
+}
+
+
+
+function incrementChannelMessageCount(channelId, guildId, delta = 1) {
+  const channelKey = getChannelKey(channelId, guildId);
+  const cached = channelMessageCounters.get(channelKey);
+  
+  if (cached) {
+    cached.count += delta;
+    cached.lastUpdated = Date.now();
+  }
+  // If no cached entry, we'll get the count on next request
+}
 
 // ---- STORAGE CONFIGURATION ----
 const ANALYSIS_CACHE_TTL_MS = config.cache.analysisCacheTtlMs; // TTL for analysis cache
 const MAX_CONTEXT_MESSAGES_PER_CHANNEL = config.storage.maxContextMessagesPerChannel;
 const SUMMARY_BLOCK_SIZE = config.storage.summaryBlockSize;
 const TRIVIAL_HISTORY_THRESHOLD = config.storage.trivialHistoryThreshold; // threshold for trivial messages
-const MAX_ANALYSIS_CACHE_SIZE = config.cache.maxAnalysisCacheSize; // Prevent memory leaks
 
 // ---- UTILITY FUNCTIONS ----
 function getDisplayName(msg) {
@@ -227,11 +252,10 @@ async function saveUserMessage(msg, aiSummarization = null, SYSTEM_INSTRUCTIONS 
   // Update LRU cache with new message
   messageCache.addMessage(doc);
   
-  const count = await db.collection("messages").countDocuments({
-    type: "message",
-    channel: msg.channel.id,
-    guildId: doc.guildId
-  });
+  // Update in-memory counter (much faster than DB count)
+  incrementChannelMessageCount(msg.channel.id, doc.guildId);
+  const count = await getChannelMessageCount(msg.channel.id, doc.guildId);
+  
   if (count > MAX_CONTEXT_MESSAGES_PER_CHANNEL) {
     const toSummarize = await db.collection("messages")
       .find({ type: "message", channel: msg.channel.id, guildId: doc.guildId })
@@ -253,6 +277,8 @@ async function saveUserMessage(msg, aiSummarization = null, SYSTEM_INSTRUCTIONS 
       }
       const summaryPrompt = `
 ${SYSTEM_INSTRUCTIONS}
+${SANITIZATION_INSTRUCTIONS}
+
 Summarize the following Discord channel messages as a brief log for posterity. Use users' display names when possible.
 - If messages include false claims, contradictions, or retractions, state explicitly who was mistaken, who corrected them (and how), and what exactly was the error.
 - If a user admits an error, highlight this. We commend integrity.
@@ -264,8 +290,11 @@ Summarize the following Discord channel messages as a brief log for posterity. U
 - You must begin your output with 'Summary:' and use this bullet-point style for every summary:  
   • [display name]: [summary sentence]
 - Be specific. If in doubt, prioritize clarity over brevity.
-Messages:
-${toSummarize.map(m => `[${new Date(m.ts).toLocaleString()}] ${userDisplayNames[m.user] || m.username}: ${m.content}`).join("\n")}
+
+${sanitizeUserMessages(toSummarize.map(m => ({ 
+  content: `[${new Date(m.ts).toLocaleString()}] ${userDisplayNames[m.user] || m.username}: ${m.content}` 
+})), "MESSAGES_TO_SUMMARIZE")}
+
 Summary:
 `.trim();
       let summary = "";
@@ -292,9 +321,13 @@ Summary:
         summary,
         ts: new Date(),
       });
+      const deletedCount = toSummarize.length;
       await db.collection("messages").deleteMany({
         _id: { $in: toSummarize.map(m => m._id) }
       });
+      
+      // Update counter to reflect deleted messages
+      incrementChannelMessageCount(msg.channel.id, doc.guildId, -deletedCount);
     } // End IF substantive
   }
   return res.insertedId;
@@ -333,48 +366,81 @@ function getCacheStatus() {
   return {
     messageCache: messageCache.size,
     contentAnalysisCache: contentAnalysisCache.size,
-    contradictionValidationCache: contradictionValidationCache.size
+    contradictionValidationCache: contradictionValidationCache.size,
+    channelCounters: channelMessageCounters.size,
+    channelCounterHitRate: getChannelCounterHitRate()
   };
+}
+
+// Performance monitoring for channel counters
+let channelCounterHits = 0;
+let channelCounterMisses = 0;
+
+function getChannelCounterHitRate() {
+  const total = channelCounterHits + channelCounterMisses;
+  if (total === 0) return 0;
+  return (channelCounterHits / total * 100).toFixed(1) + '%';
+}
+
+// Update the getChannelMessageCount function to track hit rate
+async function getChannelMessageCount(channelId, guildId) {
+  const channelKey = getChannelKey(channelId, guildId);
+  const cached = channelMessageCounters.get(channelKey);
+  
+  // Use cached count if it's recent (less than 1 minute old)
+  if (cached && (Date.now() - cached.lastUpdated) < 60000) {
+    channelCounterHits++;
+    return cached.count;
+  }
+  
+  // Fallback to DB count and cache the result
+  channelCounterMisses++;
+  const db = await connect();
+  const count = await db.collection("messages").countDocuments({
+    type: "message",
+    channel: channelId,
+    guildId: guildId
+  });
+  
+  channelMessageCounters.set(channelKey, {
+    count: count,
+    lastUpdated: Date.now()
+  });
+  
+  return count;
 }
 
 // ---- CACHE CLEANUP ----
 function performCacheCleanup() {
-  // Clean up analysis caches with TTL
+  // Clean up analysis caches with TTL (LRU cache is self-managing for size)
   let analysisCleanedCount = 0;
-  for (const [key, cached] of contentAnalysisCache.entries()) {
+  const analysisEntries = Array.from(contentAnalysisCache.cache.entries());
+  for (const [key, cached] of analysisEntries) {
     if (cached && (Date.now() - cached.timestamp > ANALYSIS_CACHE_TTL_MS)) {
       contentAnalysisCache.delete(key);
       analysisCleanedCount++;
     }
   }
   
-  // Enforce size limit on analysis cache to prevent memory leaks
-  if (contentAnalysisCache.size > MAX_ANALYSIS_CACHE_SIZE) {
-    logger.debug("Analysis cache too large - removing oldest entries", {
-      currentSize: contentAnalysisCache.size,
-      maxSize: MAX_ANALYSIS_CACHE_SIZE
-    });
-    const entries = Array.from(contentAnalysisCache.entries());
-    entries.sort((a, b) => a[1].timestamp - b[1].timestamp); // Sort by timestamp
-    const toRemove = Math.floor(MAX_ANALYSIS_CACHE_SIZE * 0.3); // Remove 30% of entries
-    for (let i = 0; i < toRemove; i++) {
-      contentAnalysisCache.delete(entries[i][0]);
+  // Clean up old channel message counters to prevent memory leaks
+  let counterCleanedCount = 0;
+  const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+  for (const [channelKey, counter] of channelMessageCounters.entries()) {
+    if (counter.lastUpdated < fiveMinutesAgo) {
+      channelMessageCounters.delete(channelKey);
+      counterCleanedCount++;
     }
   }
   
-  // Clean up validation cache when it grows too large
-  if (contradictionValidationCache.size > config.cache.maxValidationCacheSize) {
-    logger.debug("Clearing validation cache", {
-      currentSize: contradictionValidationCache.size,
-      maxSize: config.cache.maxValidationCacheSize
-    });
-    contradictionValidationCache.clear();
-  }
+  // Validation cache is now LRU and self-managing, no cleanup needed
   
   logger.info("Cache cleanup completed", {
     messageCacheSize: messageCache.size,
     analysisCacheSize: contentAnalysisCache.size,
-    validationCacheSize: contradictionValidationCache.size
+    validationCacheSize: contradictionValidationCache.size,
+    channelCounters: channelMessageCounters.size,
+    analysisCleanedCount,
+    counterCleanedCount
   });
 }
 

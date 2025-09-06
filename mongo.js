@@ -119,4 +119,17 @@ async function resetDatabase() {
   }
 }
 
-module.exports = { connect, resetDatabase };
+async function closeConnection() {
+  try {
+    if (client) {
+      await client.close();
+      db = null;
+      logger.info("MongoDB connection closed successfully");
+    }
+  } catch (error) {
+    logger.error("Error closing MongoDB connection", { error: error.message });
+    throw error;
+  }
+}
+
+module.exports = { connect, resetDatabase, closeConnection };

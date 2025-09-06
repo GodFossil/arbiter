@@ -74,25 +74,39 @@ function isTrivialOrSafeMessage(content) {
   if (!content || typeof content !== "string") return true;
   
   const trimmed = content.trim();
-  const lower = trimmed.toLowerCase();
   
   // Quick length checks first (fastest)
   if (trimmed.length < 4) return true;
   if (trimmed.length > 200) return false; // Long messages are likely substantive
   
-  // Check cached safe words (O(1) lookup)
+  const lower = trimmed.toLowerCase();
+  
+  // Check cached safe words first (O(1) lookup, most common case)
   if (TRIVIAL_PATTERNS.safe.has(lower)) return true;
   
-  // Check compiled regex patterns (faster than multiple pattern checks)
-  if (TRIVIAL_PATTERNS.onlyEmoji.test(content)) return true;
+  // Pre-check for common patterns to avoid expensive regex
+  const firstChar = lower[0];
+  const lastChar = lower[lower.length - 1];
+  
+  // Quick character checks before regex
+  if (firstChar >= 'a' && firstChar <= 'z' && lower.length <= 10) {
+    // Only run regex patterns for short lowercase strings
+    if (TRIVIAL_PATTERNS.shortAcronym.test(lower)) return true;
+    if (TRIVIAL_PATTERNS.reactionText.test(lower)) return true;
+    if (TRIVIAL_PATTERNS.fillerPhrases.test(lower)) return true;
+    if (TRIVIAL_PATTERNS.acknowledgments.test(lower)) return true;
+    if (lastChar === '?' && TRIVIAL_PATTERNS.simpleQuestions.test(lower)) return true;
+  }
+  
+  // Only check expensive patterns for likely candidates
+  if (lower.length <= 20) {
+    if (TRIVIAL_PATTERNS.repeatedChars.test(lower)) return true;
+    if (TRIVIAL_PATTERNS.onlyNumbers.test(lower)) return true;
+  }
+  
+  // Most expensive patterns last
   if (TRIVIAL_PATTERNS.onlyPunctuation.test(content)) return true;
-  if (TRIVIAL_PATTERNS.repeatedChars.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.onlyNumbers.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.shortAcronym.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.reactionText.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.fillerPhrases.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.simpleQuestions.test(lower)) return true;
-  if (TRIVIAL_PATTERNS.acknowledgments.test(lower)) return true;
+  if (TRIVIAL_PATTERNS.onlyEmoji.test(content)) return true;
   
   // Advanced trivial detection
   const words = lower.split(/\s+/);

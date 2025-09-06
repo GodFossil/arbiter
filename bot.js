@@ -10,6 +10,9 @@ logger.info("Configuration loaded and validated");
 
 // ---- MODULE IMPORTS ----
 const express = require("express");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const compression = require("compression");
 const { createDiscordClient } = require("./bot/core/client");
 const botState = require("./bot/core/state");
 const { handleMessageCreate } = require("./bot/events/messageCreate");
@@ -22,45 +25,130 @@ logger.info("All modules loaded successfully");
 
 // ---- KEEPALIVE SERVER ----
 const app = express();
+
+// Security middleware (configurable)
+if (config.security.enableHelmet) {
+  app.use(helmet({
+    contentSecurityPolicy: false, // Disable CSP for simple health endpoint
+    crossOriginEmbedderPolicy: false
+  }));
+  logger.info("Helmet security headers enabled");
+}
+
+app.use(compression());
+
+// Rate limiting (configurable)
+if (config.security.enableRateLimit) {
+  const healthCheckLimiter = rateLimit({
+    windowMs: config.security.rateLimit.windowMs,
+    max: config.security.rateLimit.max,
+    message: { error: config.security.rateLimit.message, retryAfter: Math.floor(config.security.rateLimit.windowMs / 1000) },
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+      logger.warn("Rate limit exceeded", { 
+        ip: req.ip, 
+        userAgent: req.get('User-Agent'),
+        endpoint: req.path,
+        windowMs: config.security.rateLimit.windowMs,
+        maxRequests: config.security.rateLimit.max
+      });
+      res.status(429).json({ 
+        error: config.security.rateLimit.message, 
+        retryAfter: Math.floor(config.security.rateLimit.windowMs / 1000)
+      });
+    }
+  });
+
+  app.use(healthCheckLimiter);
+  logger.info("Rate limiting enabled", { 
+    windowMs: config.security.rateLimit.windowMs,
+    maxRequests: config.security.rateLimit.max
+  });
+}
+
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    service: 'Arbiter',
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime())
+  });
+});
+
+// Security headers for all other requests
+app.use((req, res) => {
+  logger.warn("Unauthorized endpoint access", { 
+    ip: req.ip,
+    path: req.path,
+    method: req.method,
+    userAgent: req.get('User-Agent')
+  });
+  res.status(404).json({ error: 'Not Found' });
+});
+
 const PORT = config.server.port;
-app.get('/', (_req, res) => res.send('Arbiter - OK'));
-app.listen(PORT, () => logger.info("Keepalive server started", { port: PORT }));
+app.listen(PORT, () => logger.info("Secure keepalive server started", { port: PORT }));
 
 // ---- DISCORD CLIENT SETUP ----
 const client = createDiscordClient();
 
+// ---- AI INITIALIZATION ----
+// Initialize AI utilities before login to prevent race conditions
+logger.info("Initializing AI utilities...");
+let aiInitialized = false;
+
+async function initializeBot() {
+  try {
+    await initializeAIUtils();
+    aiInitialized = true;
+    logger.info("AI utilities initialized successfully");
+    return true;
+  } catch (e) {
+    logger.error("Failed to initialize AI utilities", { error: e.message });
+    return false;
+  }
+}
+
 // ---- PERIODIC CLEANUP ----
-setInterval(async () => {
-  // Clean up source mappings and disable expired buttons
-  await cleanupSourceMappings(client);
-  
-  // Perform storage cache cleanup
-  performCacheCleanup();
-  
-  const { storage } = require('./logger');
-  storage.debug("Periodic cleanup completed");
-}, config.server.cleanupIntervalMinutes * 60 * 1000);
+let cleanupInterval;
+
+async function performPeriodicCleanup() {
+  try {
+    // Clean up source mappings and disable expired buttons
+    await cleanupSourceMappings(client);
+    
+    // Perform storage cache cleanup
+    performCacheCleanup();
+    
+    const { storage } = require('./logger');
+    storage.debug("Periodic cleanup completed");
+  } catch (error) {
+    const { storage } = require('./logger');
+    storage.error("Periodic cleanup failed", { error: error.message });
+  }
+}
+
+cleanupInterval = setInterval(performPeriodicCleanup, config.server.cleanupIntervalMinutes * 60 * 1000);
 
 // ---- EVENT HANDLERS ----
 
-client.once("ready", async () => {
+client.once("ready", () => {
   const { discord } = require('./logger');
   discord.info("Bot ready", { 
     botTag: client.user.tag,
     guildCount: client.guilds.cache.size,
     userCount: client.users.cache.size
   });
-  
-  // Initialize AI utilities with rate limiting
-  try {
-    await initializeAIUtils();
-    discord.info("AI utilities initialized successfully");
-  } catch (e) {
-    discord.error("Failed to initialize AI utilities", { error: e.message });
-  }
 });
 
 client.on("messageCreate", async (msg) => {
+  // Skip processing if AI utilities aren't initialized yet
+  if (!aiInitialized) {
+    return;
+  }
+  
   try {
     await handleMessageCreate(msg, client, botState);
   } catch (e) {
@@ -125,24 +213,70 @@ client.on("shardReconnecting", shardId => {
   discord.info("Discord shard reconnecting", { shardId });
 });
 
-// ---- LOGIN ----
-logger.info("Attempting to login to Discord");
-client.login(process.env.DISCORD_TOKEN).then(() => {
-  logger.info("Discord login initiated successfully");
-}).catch(error => {
-  logger.error("Discord login failed", { error: error.message });
-  process.exit(1);
+// ---- INITIALIZATION AND LOGIN ----
+async function startBot() {
+  const initialized = await initializeBot();
+  if (!initialized) {
+    logger.error("Bot initialization failed - exiting");
+    process.exit(1);
+  }
+  
+  logger.info("Attempting to login to Discord");
+  try {
+    await client.login(process.env.DISCORD_TOKEN);
+    logger.info("Discord login successful");
+  } catch (error) {
+    logger.error("Discord login failed", { error: error.message });
+    process.exit(1);
+  }
+}
+
+// Start the bot
+startBot();
+
+// ---- ERROR HANDLING ----
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Promise Rejection', { 
+    reason: reason?.message || reason,
+    promise: promise.toString()
+  });
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
+  // For uncaught exceptions, we should exit after logging
+  setTimeout(() => process.exit(1), 1000);
 });
 
 // ---- GRACEFUL SHUTDOWN ----
-process.on('SIGINT', () => {
-  logger.info('Received SIGINT - graceful shutdown initiated');
-  client.destroy();
-  process.exit(0);
-});
+async function gracefulShutdown(signal) {
+  logger.info(`Received ${signal} - graceful shutdown initiated`);
+  
+  try {
+    // Clear intervals first
+    if (cleanupInterval) {
+      clearInterval(cleanupInterval);
+      logger.info('Cleanup interval cleared');
+    }
+    
+    // Close Discord client
+    if (client && !client.destroyed) {
+      client.destroy();
+      logger.info('Discord client destroyed');
+    }
+    
+    // Close MongoDB connection
+    const { closeConnection } = require('./mongo');
+    await closeConnection();
+    logger.info('MongoDB connection closed');
+    
+    logger.info('Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    logger.error('Error during shutdown', { error: error.message });
+    process.exit(1);
+  }
+}
 
-process.on('SIGTERM', () => {
-  logger.info('Received SIGTERM - graceful shutdown initiated');
-  client.destroy();
-  process.exit(0);
-});
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
