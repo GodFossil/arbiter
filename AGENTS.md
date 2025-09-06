@@ -4,11 +4,34 @@
 Arbiter is an advanced Discord bot designed for The Debate Server that monitors conversations for logical contradictions and critical misinformation. It embodies a stoic, truth-focused personality that prioritizes accuracy over diplomacy while maintaining intellectual integrity in debate analysis.
 
 ## Commands
-- **Start bot**: `node bot.js`
+- **Start bot**: `node bot.js` or `npm start`
 - **Start bot (production)**: `NODE_ENV=production node bot.js`
 - **Testing**: Manual/integration testing only - no automated test framework
 - **View logs (development)**: Colored console output with pino-pretty
 - **View logs (production)**: JSON format for log aggregation
+
+## Version Management
+- **Check current version**: `npm run version:info`
+- **Patch release** (bug fixes): `npm run release:patch` (1.1.0 → 1.1.1)
+- **Minor release** (new features): `npm run release:minor` (1.1.0 → 1.2.0)  
+- **Major release** (breaking changes): `npm run release:major` (1.1.0 → 2.0.0)
+- **Manual version**: `npm version [patch|minor|major]` (no echo message)
+
+### When to Use Each Version Type:
+- **PATCH** (x.x.X): Bug fixes, security patches, performance improvements, code cleanup
+- **MINOR** (x.X.x): New features, new commands, enhanced functionality, dependency updates
+- **MAJOR** (X.x.x): Breaking changes, config format changes, database schema changes, API changes
+
+### Version History:
+- **v1.1.0** (Current): Major refactor with security enhancements, performance optimizations, prompt injection fixes, resource leak fixes, and architecture improvements
+
+### 🤖 AI Agent Instructions:
+**IMPORTANT**: When making changes to the codebase, always update the version number using the appropriate command:
+- For **bug fixes, security patches, performance improvements**: `npm run release:patch`
+- For **new features, commands, or functionality**: `npm run release:minor` 
+- For **breaking changes or major architectural changes**: `npm run release:major`
+
+After making changes, update the Version History section above with a brief description of what was changed.
 
 ## Architecture & Core Files
 

@@ -1,10 +1,17 @@
 {
   "name": "arbiter-discord-bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "bot.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "version:patch": "npm version patch --no-git-tag-version",
+    "version:minor": "npm version minor --no-git-tag-version",
+    "version:major": "npm version major --no-git-tag-version",
+    "version:info": "npm pkg get version",
+    "release:patch": "npm run version:patch && echo 🚀 Patch release complete!",
+    "release:minor": "npm run version:minor && echo 🚀 Minor release complete!",
+    "release:major": "npm run version:major && echo 🚀 Major release complete!"
   },
   "dependencies": {
     "axios": "^1.6.0",
