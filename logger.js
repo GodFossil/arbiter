@@ -25,7 +25,9 @@ const getLogLevel = () => {
   return 'debug'; // development default
 };
 
-// Configure pino logger
+// Configure pino logger based on settings
+const useSimpleFormat = config.logging?.useSimpleFormat || process.env.SIMPLE_LOGS === 'true';
+
 const logger = pino({
   level: getLogLevel(),
   timestamp: pino.stdTimeFunctions.isoTime,
@@ -34,8 +36,14 @@ const logger = pino({
       target: 'pino-pretty',
       options: {
         colorize: true,
-        translateTime: 'SYS:standard',
-        ignore: 'pid,hostname'
+        translateTime: useSimpleFormat ? false : 'SYS:standard',
+        ignore: useSimpleFormat 
+          ? 'pid,hostname,time,level,correlationId,userId,username,guildId,channelId,messageId,component' 
+          : 'pid,hostname',
+        messageFormat: useSimpleFormat 
+          ? '{msg}' 
+          : '{component} | {msg}',
+        hideObject: useSimpleFormat
       }
     }
   })

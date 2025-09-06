@@ -61,7 +61,8 @@
   "logging": {
     "level": "debug",
     "enableCorrelationIds": true,
-    "enablePerformanceTracking": true
+    "enablePerformanceTracking": true,
+    "useSimpleFormat": true
   },
   "security": {
     "enableRateLimit": true,

@@ -7,8 +7,13 @@ Arbiter is an advanced Discord bot designed for The Debate Server that monitors 
 - **Start bot**: `node bot.js` or `npm start`
 - **Start bot (production)**: `NODE_ENV=production node bot.js`
 - **Testing**: Manual/integration testing only - no automated test framework
-- **View logs (development)**: Colored console output with pino-pretty
-- **View logs (production)**: JSON format for log aggregation
+
+## Logging Options
+- **Simple logs (default)**: Clean, readable output for development - just shows messages
+- **Structured logs**: Full JSON format with metadata for production monitoring
+- **Toggle simple logs**: Set `logging.useSimpleFormat: false` in config or `SIMPLE_LOGS=false`
+- **View logs (development)**: Clean messages: `[INFO] Bot ready` vs verbose JSON
+- **View logs (production)**: Full JSON format for log aggregation systems
 
 ## Version Management
 - **Check current version**: `npm run version:info`
@@ -23,7 +28,8 @@ Arbiter is an advanced Discord bot designed for The Debate Server that monitors 
 - **MAJOR** (X.x.x): Breaking changes, config format changes, database schema changes, API changes
 
 ### Version History:
-- **v1.1.2** (Current): Fixed unnecessary Exa queries and source buttons for trivial messages like greetings, improved MongoDB index logging
+- **v1.2.0** (Current): Added configurable simple logging format for better development readability - clean messages instead of verbose JSON
+- **v1.1.2**: Fixed unnecessary Exa queries and source buttons for trivial messages like greetings, improved MongoDB index logging
 - **v1.1.1**: Fixed ReferenceError in user-facing reply handler causing bot mentions to fail, improved error logging
 - **v1.1.0**: Major refactor with security enhancements, performance optimizations, prompt injection fixes, resource leak fixes, and architecture improvements
 

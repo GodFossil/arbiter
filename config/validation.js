@@ -73,7 +73,8 @@ const configSchema = Joi.object({
   logging: Joi.object({
     level: Joi.string().valid('debug', 'info', 'warn', 'error', 'silent').required(),
     enableCorrelationIds: Joi.boolean().required(),
-    enablePerformanceTracking: Joi.boolean().required()
+    enablePerformanceTracking: Joi.boolean().required(),
+    useSimpleFormat: Joi.boolean().required()
   }).required(),
 
   security: Joi.object({

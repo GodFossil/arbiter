@@ -22,6 +22,7 @@
   "logging": {
     "level": "info",
     "enableCorrelationIds": true,
-    "enablePerformanceTracking": true
+    "enablePerformanceTracking": true,
+    "useSimpleFormat": false
   }
 }
