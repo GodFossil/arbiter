@@ -1,2 +1,2 @@
 # arbiter
-The Second Coming
+The Debate Server
