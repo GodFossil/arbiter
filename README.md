@@ -1,2 +1,2 @@
-# arbiter
+# Arbiter
 The Debate Server
