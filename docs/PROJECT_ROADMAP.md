@@ -19,7 +19,7 @@ The legacy Arbiter repository and prior Render deployment are historical referen
 - **Strict neutrality.** Arbiter maps positions, reasons, evidence, ambiguity, agreement, and unresolved issues. It does not become an advocate or judge by default.
 - **Explicit invocation.** In v1, Arbiter responds conversationally only when mentioned, directly replied to, or invoked through a command or interactive component. It does not autonomously interject into ordinary chat.
 - **Explicit data boundaries.** Public debate data, sensitive staff records, provider secrets, and operational controls are different classes of information with different access/use policies.
-- **Minimum necessary retention.** Store only defined institutional/debate information required by a feature. Do not create participant psychological or ideological profiles.
+- **Purpose-bound structured memory.** Long-term memory consists primarily of defined summaries, precedents, approved references, server configuration, and automatic member dossiers. Raw message retention is bounded and authorized by channel policy; it is not the default durable-memory layer.
 - **One capability at a time.** Establish reliable interactive chat and summarization before broad web research, MCP tools, autonomous agents, moderation automation, or legacy feature parity.
 - **Provider independence.** Application services depend on an internal LLM client interface; gateway/model/provider details are configuration, not command logic.
 - **Operational discipline.** Use least privilege, private internal services, quotas, structured logging, tested failure modes, backups, and deliberate rollout.
@@ -58,6 +58,10 @@ The legacy Arbiter repository and prior Render deployment are historical referen
 | Initial specialized command | `/arbiter summarize`. | Established |
 | Conversation/debate voice | Neutral, analytical, concise, referential, and non-advocacy. | Established |
 | Context scope | Server-wide institutional/debate context is permitted only for defined categories and approved channels. | Established |
+| Deployment scope | Arbiter is exclusive to The Debate Server production guild and a separate private test guild. Production and test data remain logically separated by guild ID. | Established |
+| Memory architecture | Structured-memory-first: durable memory consists primarily of summaries, precedents, approved references, server configuration, and member dossiers. Raw messages are retained only in bounded, channel-policy-authorized windows for live context and eligible processing. | Established |
+| Member dossiers | Automatic dossiers may retain structured, source-linked debate records plus observed interaction style. They do not automatically include participant staff notes. | Established |
+| Core Arbiter identity | Preserve the legacy Arbiter persona faithfully as the v1 core identity: calm, direct, bold, stoic, wise, humble, concise, truth-oriented, intellectually honest, and non-placatory. | Established |
 | Sensitive functions | Dedicated Discord role: `Arbiter Staff`. | Established |
 | Staff notes | Staff-only; never automatically included in ordinary v1 chatbot or summary prompts. | Established |
 | Initial gateway | FreeLLMAPI as an internal self-hosted gateway. | Established |
@@ -77,6 +81,7 @@ The legacy Arbiter repository and prior Render deployment are historical referen
 | Server configuration | Approved channels, feature flags, quota values, operational settings, server policy | Arbiter Staff | Arbiter Staff | Yes, where needed |
 | Published rules and approved references | Server rules, approved references, curated guidance | Arbiter Staff | Public if source is public; otherwise Arbiter Staff | Yes, where relevant |
 | Debate summaries and precedents | Durable summaries, source metadata, and reusable precedents | Arbiter; Arbiter Staff may correct/manage | Public or staff according to source-channel policy | Yes, where relevant |
+| Member dossiers | Structured, source-linked debate records and observed interaction style | Arbiter according to channel policy; Arbiter Staff may manage | Retrieval audience remains a separate policy decision | Only when a later authorized retrieval policy permits it |
 | Participant staff notes | Sensitive internal staff recordkeeping | Arbiter Staff | Arbiter Staff | **No** |
 | Summary jobs/rate-limit state | Job lifecycle, quotas, cooldowns, minimal operations metadata | Arbiter and Arbiter Staff as needed | Arbiter Staff where operational visibility is needed | No, except required controls |
 
@@ -119,7 +124,9 @@ Message Content intent enables the technical ability to receive ordinary message
 | General channel | Optional, explicit mention/reply only | No by default | No by default | No general-history retrieval |
 | Staff/private channel | Disabled unless explicitly staff-enabled | Only by explicit staff policy | Staff-only if enabled | Never include participant staff notes |
 
-The precise message-history retention and context-window policy remains an open decision.
+Arbiter uses a structured-memory-first model. Long-term memory consists primarily of summaries, precedents, approved references, server configuration, and automatic member dossiers. Raw messages may be retained only in bounded, channel-policy-authorized windows for live context and eligible summary processing, rather than as the default durable-memory layer.
+
+The exact raw-message retention duration, context-window limits, dossier extraction triggers, dossier retrieval audience, and profile-operation controls remain open decisions.
 
 ### 4.5 Secrets
 
@@ -161,12 +168,14 @@ Arbiter Discord bot
     |     - selected discussion collection
     |     - neutral summarization
     |     - approved rule/precedent retrieval
+    |     - structured member-dossier creation and authorized retrieval
     |     - job lifecycle and audit events
     |
     +--> PostgreSQL
     |     - configuration/policies
     |     - approved context
     |     - summaries/precedents
+    |     - member dossiers
     |     - staff notes
     |     - audit metadata
     |     - job/cooldown/budget state
@@ -267,7 +276,9 @@ The bot itself must not apply production migrations during a normal restart.
 
 ### 7.1 V1 chatbot behavior
 
-Arbiter is primarily a user-interactive chatbot. In v1, a member starts an ordinary conversation by mentioning Arbiter, replying to an Arbiter response, or using an explicit Discord interaction. The exact default conversational role and the amount of approved message history used for contextual answers remain open decisions.
+Arbiter is primarily a user-interactive chatbot. In v1, a member starts an ordinary conversation by mentioning Arbiter, replying to an Arbiter response, or using an explicit Discord interaction. Arbiter preserves the legacy Arbiter persona as its core identity: calm, direct, bold, stoic, wise, humble, concise, truth-oriented, intellectually honest, and non-placatory.
+
+Task-specific instruction modules must preserve that identity while enforcing Arbiter's established authority boundaries: it does not declare debate winners, advocate for a participant by default, replace moderator judgment, autonomously moderate, or autonomously interject into ordinary discussion. The exact raw-message context-window limits remain open.
 
 Arbiter does not decide to join ordinary conversation on its own in v1, even in channels where Message Content intent gives it visibility.
 
@@ -333,7 +344,7 @@ Exact numerical limits are an open decision to be calibrated before the public r
 Deliverables:
 
 - Message-history retention/context-window policy.
-- Default chatbot role and response policy.
+- Legacy-persona instruction audit and task-specific response-policy modules.
 - Exact initial public channel policy.
 - Initial primary/fallback provider/model evaluation criteria.
 - Exact quota/cooldown proposal.
@@ -381,6 +392,7 @@ Deliverables:
 - Persistent volume and database role policy.
 - Channel-policy/configuration storage.
 - Summary/precedent storage with source visibility classification.
+- Member-dossier storage with source linkage and channel-policy boundaries.
 - Arbiter Staff role checks, staff-note CRUD, and append-only audit events.
 - PostgreSQL-backed job state.
 - Scheduled encrypted OCI backup and tested restore procedure.
@@ -478,8 +490,8 @@ These are not v1 requirements:
 
 | Decision | Why it remains open | Resolve by |
 | --- | --- | --- |
-| Message-history retention/context-window policy | Determines privacy, storage volume, contextual usefulness, and AI cost. | Phase 0 |
-| Default chatbot role | Determines whether ordinary responses prioritize debate analysis, general assistance, or a controlled blend. | Phase 0 |
+| Exact raw-message retention/context-window limits | Structured-memory-first is established, but exact duration and input/retrieval limits determine storage volume, contextual usefulness, and AI cost. | Phase 0 |
+| Dossier operation policy | Extraction triggers, retrieval audience, source/provenance requirements, retention, and staff/member controls need explicit definition. | Phase 0/3 |
 | OpenAI-compatible client package | Official OpenAI SDK adapter, direct `fetch`, Vercel AI SDK, or LangChain must be selected deliberately. | Phase 0/4 |
 | Primary/fallback provider and model | Requires a focused quality, cost, quota, privacy, and reliability evaluation. | Phase 0/4 |
 | Exact numerical limits | Cooldown, input cap, daily server budget, retry count, and stuck-job timeout need calibration. | Phase 0/5 |
