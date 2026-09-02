@@ -1,13 +1,13 @@
 # Arbiter Project Roadmap
 
 > **Status:** Canonical v1 roadmap  
-> **Last updated:** 2026-08-31  
+> **Last updated:** 2026-09-02  
 > **Repository:** `GodFossil/arbiter`  
 > **Default branch:** `master`
 
 ## 1. Version-one mission
 
-Arbiter is a modern, AI-powered utility bot for The Debate Server. Version one is an always-online, publicly usable, rate-limited Discord debate summarizer: it creates neutral, structured records of selected discussions, can use approved server context, and preserves clear boundaries around sensitive staff data.
+Arbiter is an always-online, publicly usable, rate-limited Discord chatbot for The Debate Server. It provides neutral conversational assistance and structured debate utilities, beginning with interactive discussion support and `/arbiter summarize`.
 
 Arbiter supports discussion; it does not replace human judgment, moderator authority, or participant agency. It must not declare debate winners, advocate for a participant by default, make autonomous moderation decisions, or present uncertain claims as established fact.
 
@@ -15,69 +15,89 @@ The legacy Arbiter repository and prior Render deployment are historical referen
 
 ## 2. Governing principles
 
-- **Public utility first.** Initial public commands must solve a defined debate-support problem and remain understandable, predictable, and abuse-resistant.
+- **Public utility first.** Initial public functionality must solve a defined debate/discussion need while remaining predictable, understandable, and abuse-resistant.
 - **Strict neutrality.** Arbiter maps positions, reasons, evidence, ambiguity, agreement, and unresolved issues. It does not become an advocate or judge by default.
-- **Explicit permission boundaries.** Public debate information, sensitive staff records, provider secrets, and operational controls are distinct classes of data.
-- **Minimal necessary data.** Retain only what a defined feature needs; do not build participant psychological or ideological profiles.
-- **One capability at a time.** Prove the summarizer before adding agents, broad web research, MCP tools, moderation automation, or feature parity with the legacy bot.
-- **Provider independence.** The application calls a provider-neutral LLM client; gateway/model/provider details remain configuration, not command logic.
-- **Operational discipline.** Use least privilege, private internal services, rate limits, structured logging, tested failure modes, and deliberate rollout.
-- **Decision transparency.** Significant choices are recorded in `docs/DECISIONS.md`; proposed technologies are not commitments until approved for a defined use case.
+- **Explicit invocation.** In v1, Arbiter responds conversationally only when mentioned, directly replied to, or invoked through a command or interactive component. It does not autonomously interject into ordinary chat.
+- **Explicit data boundaries.** Public debate data, sensitive staff records, provider secrets, and operational controls are different classes of information with different access/use policies.
+- **Minimum necessary retention.** Store only defined institutional/debate information required by a feature. Do not create participant psychological or ideological profiles.
+- **One capability at a time.** Establish reliable interactive chat and summarization before broad web research, MCP tools, autonomous agents, moderation automation, or legacy feature parity.
+- **Provider independence.** Application services depend on an internal LLM client interface; gateway/model/provider details are configuration, not command logic.
+- **Operational discipline.** Use least privilege, private internal services, quotas, structured logging, tested failure modes, backups, and deliberate rollout.
+- **Decision transparency.** Significant choices belong here and in `docs/DECISIONS.md`; a candidate technology is not a commitment until selected for a defined need.
 
-## 3. Established v1 decisions
+## 3. Established decisions
 
 | Area | Decision | Status |
 | --- | --- | --- |
-| Repository | The clean implementation lives in `GodFossil/arbiter`. The legacy repository is historical reference only. | Established |
-| Visibility | The repository begins private. Public release requires a separate security, privacy, licensing, and contributor-readiness review. | Established |
-| Integration branch | `master` is the canonical default and integration branch. | Established |
-| Documentation | Canonical documentation lives in version-controlled `docs/`, not a separate wiki. | Established |
+| Repository | Clean implementation: `GodFossil/arbiter`; legacy project is historical reference only. | Established |
+| Repository visibility | Private until a separate security, privacy, licensing, and contributor-readiness review. | Established |
+| Default/integration branch | `master`. | Established |
+| Documentation | Canonical project documentation lives in version-controlled `docs/`, not a separate wiki. | Established |
 | Workflow | Issues track work; pull requests integrate meaningful changes; a Project may visualize work state. | Established |
-| Merge policy | Squash merge is the sole enabled integration strategy. | Established |
-| Runtime ecosystem | Begin in the Node ecosystem; JavaScript versus TypeScript remains a deliberate pre-foundation choice. | Provisional |
-| Public availability | Any server member may use the initial public command, subject to channel policy and anti-abuse limits. | Established |
-| V1 product | Debate assistance first, beginning with neutral thread summarization. | Established |
-| First command | `/arbiter summarize` is the first AI workflow. | Established |
-| Debate voice | Neutral, analytical, concise, referential, and non-advocacy. | Established |
-| Context scope | Server-wide institutional/debate context is permitted for defined categories only. | Established |
-| Sensitive data | A dedicated `Arbiter Staff` role controls sensitive functions and staff notes. | Established |
-| Staff-note policy | Staff notes are never included automatically in ordinary v1 AI prompts. | Established |
-| AI client | All model calls pass through an internal provider-neutral LLM client abstraction. | Established |
-| Initial gateway | FreeLLMAPI is the initial internal gateway evaluation/launch candidate. | Established |
-| Model experience | One carefully selected general-purpose default model; no public model selector. | Established |
-| Provider routing | One personally controlled primary provider/key, one personally controlled fallback, and an optional disabled managed emergency route. | Established |
-| Gateway exposure | Arbiter alone reaches the gateway over an internal Docker network. The gateway API/dashboard is never public-facing. | Established |
-| Initial hosting | Oracle Cloud Always Free VM, subject to tenancy capacity/limits, using Docker Compose. | Established |
-| External tools | Broad web research, MCP tools, and public API integrations are deferred until the summarizer is stable. | Established |
+| Merge policy | Squash merge is the sole integration strategy. | Established |
+| Language/runtime | TypeScript on Node.js. | Established |
+| Discord library | Plain `discord.js`, without a decorator framework. | Established |
+| Package manager | pnpm, with a committed `pnpm-lock.yaml` and a pinned `packageManager` field. | Established |
+| Module system | ES Modules: `"type": "module"`, TypeScript `module` and `moduleResolution` set to `NodeNext`. | Established |
+| Local development | `tsx` runs and watches TypeScript source. | Established |
+| Production runtime | Compile TypeScript into `dist/`; run compiled JavaScript with Node. | Established |
+| Testing | Vitest. | Established |
+| Formatting/linting | Biome. | Established |
+| Database | PostgreSQL in a private Docker Compose service. | Established |
+| Database access | Drizzle ORM; schema defined in TypeScript. | Established |
+| Schema migrations | Reviewed, generated SQL migrations in Git; a separate migration job runs before an updated bot starts. | Established |
+| Database backups | Scheduled encrypted PostgreSQL backups to private OCI Object Storage, with retention and restore tests. | Established |
+| Background work | PostgreSQL-backed summary-job tracking; begin with one worker and no Redis/BullMQ. | Established |
+| Runtime validation | Zod at untrusted input/output boundaries. | Established |
+| Public availability | Members may use enabled public features, subject to channel policy, cooldowns, quotas, and limits. | Established |
+| V1 chatbot activation | Mention Arbiter, reply directly to Arbiter, or use slash/context-menu commands and components. | Established |
+| Passive participation | Arbiter does not autonomously reply to ordinary messages in v1. | Deferred |
+| Message Content intent | Enabled because approved message history is required for contextual chat and summaries. | Established |
+| History-use policy | Message-content technical access never by itself authorizes retention, summarization, or AI-context use; a channel policy does. | Established |
+| V1 debate utility | Neutral thread/discussion summarization. | Established |
+| Initial specialized command | `/arbiter summarize`. | Established |
+| Conversation/debate voice | Neutral, analytical, concise, referential, and non-advocacy. | Established |
+| Context scope | Server-wide institutional/debate context is permitted only for defined categories and approved channels. | Established |
+| Sensitive functions | Dedicated Discord role: `Arbiter Staff`. | Established |
+| Staff notes | Staff-only; never automatically included in ordinary v1 chatbot or summary prompts. | Established |
+| Initial gateway | FreeLLMAPI as an internal self-hosted gateway. | Established |
+| Model experience | One selected general-purpose default model; no public model picker. | Established |
+| Provider routing | One personally controlled primary provider/key, one personally controlled fallback, optional disabled managed emergency route. | Established |
+| Gateway client package | Unresolved: select after chatbot context policy is decided. | Open |
+| Gateway exposure | Bot reaches gateway only through the private Docker network; gateway API/dashboard is not public. | Established |
+| Initial hosting | Oracle Cloud Always Free VM, subject to actual tenancy capacity/limits, using Docker Compose. | Established |
+| External tools | Broad web research, MCP, public APIs, and write-capable tools are deferred until core chat/summarization is stable. | Deferred |
 
-## 4. Data, privacy, and permission model
+## 4. Data and authorization model
 
-Arbiter stores four different information classes. Access control and prompt selection must respect these boundaries.
+### 4.1 Data classes
 
-| Data class | Purpose | Who may create or edit | Who may read | Used automatically by ordinary v1 summaries? |
+| Data class | Purpose | Who may create/edit | Who may read | Automatically used in ordinary v1 chatbot/summaries? |
 | --- | --- | --- | --- | ---: |
-| Server configuration | Approved channels, command settings, quotas, feature toggles, and server policy | Arbiter Staff | Arbiter Staff | Yes, where relevant |
-| Published rules and approved references | Server rules, curated reference documents, and approved guidance | Arbiter Staff | Public if the source is public; otherwise Arbiter Staff | Yes, where relevant |
-| Debate summaries and precedents | Durable summaries, metadata, and established debate precedents | Arbiter; Arbiter Staff may correct/manage | Public or staff, according to channel/source policy | Yes, where relevant |
+| Server configuration | Approved channels, feature flags, quota values, operational settings, server policy | Arbiter Staff | Arbiter Staff | Yes, where needed |
+| Published rules and approved references | Server rules, approved references, curated guidance | Arbiter Staff | Public if source is public; otherwise Arbiter Staff | Yes, where relevant |
+| Debate summaries and precedents | Durable summaries, source metadata, and reusable precedents | Arbiter; Arbiter Staff may correct/manage | Public or staff according to source-channel policy | Yes, where relevant |
 | Participant staff notes | Sensitive internal staff recordkeeping | Arbiter Staff | Arbiter Staff | **No** |
+| Summary jobs/rate-limit state | Job lifecycle, quotas, cooldowns, minimal operations metadata | Arbiter and Arbiter Staff as needed | Arbiter Staff where operational visibility is needed | No, except required controls |
 
-### 4.1 Arbiter Staff role
+### 4.2 Arbiter Staff role
 
-Create a dedicated Discord role named `Arbiter Staff`. It is the v1 permission boundary for:
+Create and document a dedicated Discord role called `Arbiter Staff`. It is the v1 permission boundary for:
 
-- server configuration and command enablement;
+- approved-channel configuration and feature enablement;
 - quota adjustment and temporary public-command disablement;
-- approved rules/references and precedent management;
+- approved rules/reference and precedent management;
 - protected participant-note CRUD;
+- operational job/failure visibility; and
 - sensitive audit access.
 
-Do not assume that every moderator or administrator needs access to staff notes. Normal public command use does not require this role.
+Do not assume every moderator or administrator needs staff-note access. Normal public chatbot use does not require the role.
 
-### 4.2 Staff notes and audit trail
+### 4.3 Staff notes and audit events
 
-Staff notes are a protected record system, not a hidden source of AI judgment. In v1 they must not be automatically retrieved for, appended to, or summarized by normal public prompts.
+Staff notes are protected records, not a hidden source of AI judgment. Ordinary public chatbot and summary prompts must not retrieve, append, summarize, or otherwise use them.
 
-Every sensitive note action creates an append-only audit event containing:
+Every sensitive-note action must create an append-only audit event containing:
 
 ```text
 timestamp
@@ -87,11 +107,23 @@ target Discord user ID
 reason or note category
 ```
 
-The audit event should not duplicate the sensitive note text unless a separately approved policy requires it. Retention, correction, and deletion procedures must be documented before real staff data is collected.
+Audit events should not duplicate sensitive note text unless a separately approved policy requires it. Define retention, correction, deletion, and access-review procedures before real staff notes are stored.
 
-### 4.3 Secrets
+### 4.4 Approved-channel policy
 
-Provider secrets are not application data. Discord tokens, gateway credentials, upstream provider keys, database URLs, encryption keys, SSH keys, webhook signing secrets, and production exports must never be committed, logged, pasted into issues/PRs, or put in `.env.example`.
+Message Content intent enables the technical ability to receive ordinary message content; it does not grant unlimited product permission to use that content. Arbiter must maintain a database-backed policy per channel/thread category.
+
+| Channel policy | Mention/reply chatbot | History collection for `/arbiter summarize` | Retain summaries/precedents | Ordinary AI context |
+| --- | ---: | ---: | ---: | ---: |
+| Approved debate/discussion channel | Yes | Yes | Yes | Approved public/server context only |
+| General channel | Optional, explicit mention/reply only | No by default | No by default | No general-history retrieval |
+| Staff/private channel | Disabled unless explicitly staff-enabled | Only by explicit staff policy | Staff-only if enabled | Never include participant staff notes |
+
+The precise message-history retention and context-window policy remains an open decision.
+
+### 4.5 Secrets
+
+Discord tokens, gateway credentials, upstream provider keys, database URLs, encryption keys, SSH keys, webhook signing secrets, and production exports are not application data. Never commit, log, paste into issues/PRs, or include them in `.env.example`.
 
 Initial configuration contract:
 
@@ -113,63 +145,69 @@ LOG_LEVEL=info
 ```text
 Discord users
     |
-    | Slash command or context-menu command
+    | mention / direct reply / slash command / context-menu command / component
     v
 Arbiter Discord bot
     |
-    +--> Public-command protections
-    |     - permission/channel policy
-    |     - per-user and per-channel cooldowns
-    |     - per-server AI budget
-    |     - input/message-history limits
-    |     - one active job per thread
+    +--> Interaction and channel policy
+    |     - explicit invocation checks
+    |     - Arbiter Staff authorization
+    |     - approved-channel policy
+    |     - per-user/per-channel cooldowns
+    |     - server budget and input limits
     |
     +--> Application services
-    |     - selected-thread collection and validation
-    |     - neutral summarization workflow
-    |     - public rule/precedent retrieval
-    |     - authorization and audit events
+    |     - conversational response workflow
+    |     - selected discussion collection
+    |     - neutral summarization
+    |     - approved rule/precedent retrieval
+    |     - job lifecycle and audit events
     |
-    +--> Arbiter database
-    |     - server configuration
-    |     - approved rules/references
-    |     - summaries and precedents
-    |     - protected staff notes
+    +--> PostgreSQL
+    |     - configuration/policies
+    |     - approved context
+    |     - summaries/precedents
+    |     - staff notes
     |     - audit metadata
+    |     - job/cooldown/budget state
     |
-    +--> Provider-neutral LLM client
+    +--> Provider-neutral LLM client (package choice pending)
               |
               v
-          Internal AI gateway
+          FreeLLMAPI: private internal gateway
               |
-              +--> primary provider / one default model
-              +--> normal fallback provider
+              +--> one default primary model/provider
+              +--> normal fallback provider/model
               +--> optional disabled emergency route
 ```
 
 ### 5.1 Discord layer
 
-The Discord layer handles command registration, interaction acknowledgement, permission and channel checks, Discord API constraints, and output formatting. It contains no provider-specific model logic and as little debate reasoning as possible.
+The Discord layer handles Gateway connection, commands, interactions, direct mentions/replies, permission/channel checks, acknowledgement/defer behavior, and Discord-ready response formatting. It must contain no provider-specific model logic and as little business/debate logic as practical.
 
 ### 5.2 Application services
 
-Application services own command-specific behavior: collection/validation of the selected discussion, context selection, fixed prompt construction, structured output validation, budget enforcement, persistence, and Discord-ready response shaping.
+Application services own conversation context selection, summary collection/cleanup, prompt construction, Zod validation, budget enforcement, job handling, persistence, and output shaping. They operate through interfaces for database, time, and LLM access so behavior can be tested without Discord, PostgreSQL, or a live provider.
 
-### 5.3 Database
+### 5.3 Database/job boundary
 
-A small relational database is an early v1 requirement because durable server configuration, approved context, summaries, precedents, staff-note access control, and audit metadata are established needs. Do not add a vector database or broad semantic-memory stack unless relational retrieval demonstrably becomes inadequate.
+PostgreSQL is the durable source of truth for persistent Arbiter state. Summary jobs use explicit states:
 
-### 5.4 Model boundary
+```text
+queued -> running -> completed
+                 -> failed
+                 -> cancelled
+```
 
-The rest of Arbiter must call one internal LLM client interface. Model names, base URLs, keys, timeouts, request limits, retries, and fallback policy are configuration. This preserves the ability to change gateway or provider without rewriting command behavior.
+A uniqueness/active-job rule prevents duplicate work for the same guild/channel/thread/context window. Workers claim jobs through PostgreSQL locking; begin with one worker and only increase concurrency after measured need and testing.
 
-### 5.5 Separate future tool boundary
+### 5.4 Future tool boundary
 
-Web retrieval, public data, and MCP tools are not part of the v1 summarizer path. If adopted later, every tool must have an allowlist, defined command scope, authorization check, validated inputs, timeouts, size limits, audit visibility, and source attribution where relevant. Begin only with read-only tools.
+External retrieval, public APIs, and MCP tools are outside v1's ordinary chatbot/summarizer path. Any later tool needs an allowlist, defined command scope, authorization, input/output validation, timeouts, limits, audit visibility, and source attribution where appropriate. Start with read-only capabilities.
 
-## 6. Hosting and deployment baseline
+## 6. Hosting, deployment, and recovery
 
-The initial deployment target is an Oracle Cloud Always Free VM in the tenancy home region, using Docker Compose. Always Free allocation and capacity are subject to Oracle tenancy limits and regional availability; confirm the actual available compute shape in the OCI console rather than hard-coding a capacity assumption.
+### 6.1 Initial topology
 
 ```text
 Oracle Cloud Always Free VM
@@ -177,70 +215,71 @@ Oracle Cloud Always Free VM
     +--> Docker Compose
            |
            +--> arbiter-bot
-           |     - Discord connection
-           |     - commands
-           |     - summarization workflow
+           |     - discord.js gateway connection
+           |     - public chatbot / summary services
            |
            +--> arbiter-database
-           |     - persistent state
-           |     - approved context
-           |     - summaries / precedents
-           |     - protected staff notes
+           |     - PostgreSQL
+           |     - persistent volume
+           |
+           +--> arbiter-migrate
+           |     - one-time migration job before updated bot startup
            |
            +--> ai-gateway
-                 - internal-only API
-                 - provider routing / fallback
-                 - no public dashboard/API exposure
+                 - FreeLLMAPI
+                 - internal-only API/dashboard
 ```
 
-### 6.1 Network policy
+Oracle Always Free availability is subject to home-region capacity and tenancy service limits. Confirm actual available VM shape before provisioning; do not make roadmap capacity figures a guarantee.
 
-- The bot reaches Discord outbound.
-- The bot reaches the gateway only over the Docker internal network.
-- The database accepts connections only from authorized internal containers.
-- Do not publicly expose the gateway API or dashboard for convenience.
-- Admin access to the VM and any gateway dashboard must be deliberate, authenticated, and restricted.
+### 6.2 Network and secrets policy
 
-### 6.2 Secrets in deployment
+- Arbiter reaches Discord and approved providers/gateway routes outbound as required.
+- The bot reaches PostgreSQL and FreeLLMAPI only over the internal Docker network.
+- PostgreSQL has no public port.
+- FreeLLMAPI's API and dashboard have no public port.
+- Use Docker Compose secrets where supported. Where a dependency requires environment variables, use protected server-side configuration that is not Git-tracked.
+- Do not bake secrets into images or Dockerfiles.
 
-Use Docker Compose secrets where supported so a service receives only secrets explicitly granted to it. Where a dependency only supports environment variables, use a locked-down server-side mechanism and ensure it is not tracked by Git. Never bake a secret into a Dockerfile or image.
+### 6.3 Migration policy
 
-### 6.3 Deployment readiness
+1. Modify Drizzle TypeScript schema.
+2. Generate SQL migrations with Drizzle Kit.
+3. Review the migration SQL in the pull request.
+4. Test against a non-production/disposable database.
+5. Take the required pre-migration backup.
+6. Deploy and run `arbiter-migrate` once.
+7. Start/update the bot only after migration success.
 
-Before production rollout, verify container restart behavior, bot reconnect behavior after VM restart, basic health checks, logging, persistent-volume behavior, backup/restore for the database, and a documented rollback procedure.
+The bot itself must not apply production migrations during a normal restart.
 
-## 7. AI gateway and model policy
+### 6.4 Backup policy
 
-FreeLLMAPI is Arbiter's initial internal gateway because it offers a self-hosted, OpenAI-compatible integration surface, operator-controlled provider credentials, routing/fallback capabilities, and separation between command logic and upstream providers.
+- Use scheduled PostgreSQL custom-format logical backups via `pg_dump -Fc`.
+- Encrypt backups before off-VM upload.
+- Upload to a private OCI Object Storage bucket.
+- Keep multiple restore points under a documented retention policy.
+- Take an additional backup before a production migration.
+- Test restoration into an isolated PostgreSQL environment before public rollout and periodically afterward.
+- Do not commit backup files, backup credentials, or encryption keys to Git.
 
-Initial configuration must stay intentionally small:
+## 7. Chat and summarizer behavior
 
-| Gateway element | V1 policy |
-| --- | --- |
-| Default model | One general-purpose, instruction-following model selected through a focused quality test |
-| Primary provider | One personally controlled provider account/key |
-| Normal fallback | One additional personally controlled provider account/key |
-| Managed fallback | Optional; configured only if needed and disabled by default |
-| Public model selection | None |
-| Bot-to-gateway route | Internal Docker network only |
-| Gateway application key | Separate Arbiter-specific key; never shared with Discord users |
-| Upstream provider keys | Gateway-only secrets; absent from Discord command logic |
+### 7.1 V1 chatbot behavior
 
-Do not add every supported provider at launch. A small routing configuration makes quality, latency, quota exhaustion, formatting errors, and provider failure diagnosable. Test normal operation, timeouts, quota exhaustion, malformed response handling, and fallback before public rollout.
+Arbiter is primarily a user-interactive chatbot. In v1, a member starts an ordinary conversation by mentioning Arbiter, replying to an Arbiter response, or using an explicit Discord interaction. The exact default conversational role and the amount of approved message history used for contextual answers remain open decisions.
 
-OmniRoute remains a future evaluation/replacement candidate if FreeLLMAPI's quality, capacity, fallback controls, or provider mix proves inadequate. Do not run both gateways in production at v1 launch without a demonstrated need.
+Arbiter does not decide to join ordinary conversation on its own in v1, even in channels where Message Content intent gives it visibility.
 
-## 8. Public summarizer specification
-
-### 8.1 Command
+### 7.2 First specialized command
 
 ```text
 /arbiter summarize
 ```
 
-The command runs only through explicit user invocation in an approved channel or discussion thread. It collects a bounded window of relevant messages, removes irrelevant bot/system content, identifies participants only as necessary for a fair summary, retrieves only approved public/server context, and sends that bounded material to the fixed neutral summarization workflow.
+This command runs only in an approved discussion channel/thread. It validates invocation, channel policy, cooldown/budget status, minimum discussion threshold, active-job state, and bounded input before creating a `summarize_thread` job.
 
-### 8.2 Output contract
+### 7.3 Summary output contract
 
 ```text
 Discussion question
@@ -266,183 +305,209 @@ Unresolved issues
 - Questions, evidence gaps, or logical disagreements still requiring resolution.
 ```
 
-The summary is a record, not a verdict. It may say a claim was unsupported, unclear, internally inconsistent, or unanswered only when that description is grounded in the selected discussion. It must not claim that a participant won.
+The result is a record, not a verdict. Arbiter may describe a thread claim as unsupported, unclear, internally inconsistent, or unanswered only when grounded in the selected material. It must not declare that a participant won.
 
-### 8.3 Public-command protections
+### 7.4 Public protections
 
-| Protection | Initial behavior |
+| Protection | V1 behavior |
 | --- | --- |
-| Channel/thread policy | Run only in approved discussion channels or threads |
-| Per-user cooldown | Limit repeat requests by one member |
-| Per-channel cooldown | Prevent overlapping or repetitive summaries in the same discussion |
-| Per-server AI budget | Cap daily summarization work to protect free-tier capacity |
-| Input cap | Limit collected message count and total characters/tokens |
-| Minimum threshold | Decline tiny discussions lacking enough material for a useful summary |
-| Active-job lock | Allow one active summary job per thread/context |
-| Failure handling | State clearly when busy, temporarily unavailable, or out of quota |
-| Staff controls | Arbiter Staff can adjust limits or temporarily disable the command |
+| Channel policy | Chat history and summaries only in configured/approved spaces |
+| Per-user cooldown | Limit repeated expensive requests by one member |
+| Per-channel cooldown | Prevent overlapping/repetitive requests in the same discussion |
+| Per-server budget | Cap AI work to protect free-tier capacity and fairness |
+| Input cap | Bound messages and total character/token volume |
+| Minimum threshold | Decline tiny discussions unsuitable for summary |
+| Active-job lock | One active summary job per matching context |
+| Output validation | Zod validates model output before Discord posting |
+| Failure behavior | Clear busy/unavailable/out-of-quota response; no duplicate replies |
+| Staff control | Arbiter Staff can adjust limits or disable public features |
 
-Initial launch occurs in an approved test channel, despite the eventual public availability. Expand access only after review of quality, cost, failure behavior, and misuse patterns.
+Exact numerical limits are an open decision to be calibrated before the public rollout.
 
-## 9. Implementation sequence
+## 8. Implementation sequence
 
-### Phase 0 — Product contract
+### Phase 0 — Product, privacy, and context contract
 
-**Goal:** Lock the operational boundaries of the first useful release.
-
-Deliverables:
-
-- `/arbiter summarize` user story, exact input scope, and output contract.
-- Channel/thread policy and public-command protections.
-- Privacy/data-class policy and staff-note exclusion rule.
-- Arbiter Staff role definition and authority.
-- Clear non-goals for v1.
-
-**Exit criterion:** We can state what the bot does, what context it can use, what it never uses, who controls sensitive operations, and how a normal member experiences a refusal/failure.
-
-### Phase 1 — Bot foundation
-
-**Goal:** Create a minimal, safe Discord application foundation.
+**Goal:** Complete the remaining high-impact policy decisions before coding user-facing behavior.
 
 Deliverables:
 
-- Final JavaScript-versus-TypeScript decision and current Discord-library selection.
-- Discord application and bot bootstrap.
-- Configuration loading and startup validation.
-- Command handler structure, role checks, and diagnostic command.
-- LLM client interface with no live provider dependency yet.
-- Formatting, linting, unit-test foundation, and a read-only GitHub Actions quality workflow.
+- Message-history retention/context-window policy.
+- Default chatbot role and response policy.
+- Exact initial public channel policy.
+- Initial primary/fallback provider/model evaluation criteria.
+- Exact quota/cooldown proposal.
+- Server-facing privacy/retention disclosure.
+- `/arbiter summarize` user story, input scope, refusal/failure rules, and output contract.
 
-**Exit criterion:** The bot starts with valid configuration, fails safely with invalid configuration, and responds to a harmless diagnostic command in the private test environment.
+**Exit criterion:** We can state what Arbiter responds to, which history it can use/retain, what it never uses, and what an ordinary member sees when it succeeds, refuses, or fails.
+
+### Phase 1 — TypeScript bot foundation
+
+**Goal:** Build the local application skeleton.
+
+Deliverables:
+
+- ESM/NodeNext TypeScript pnpm project.
+- Plain discord.js application bootstrap.
+- `tsx` local development and compiled `dist/` production scripts.
+- Biome, Vitest, Zod, and initial CI workflow.
+- Configuration loader/startup validation.
+- Basic role/channel policy abstractions and a harmless diagnostic command.
+- Provider-neutral LLM client interface, without a chosen client-package implementation.
+
+**Exit criterion:** The bot starts safely in a private test server/channel and fails safely with invalid configuration.
 
 ### Phase 2 — Deployment baseline
 
-**Goal:** Make the minimal bot continuously runnable on the intended infrastructure.
+**Goal:** Run the minimal bot continuously on the intended Oracle VM.
 
 Deliverables:
 
-- Oracle Always Free VM provisioned and hardened for the project.
-- Docker and Docker Compose installation.
-- `arbiter-bot` container deployed without gateway/database dependencies initially.
-- Private network policy, restart behavior, health check, and basic structured logs.
+- OCI VM provisioned/hardened for Arbiter.
+- Docker Compose production configuration.
+- Bot container, private networking, restart policy, basic health/log behavior.
+- Verified reconnection after container and VM restart.
 
-**Exit criterion:** The bot reconnects cleanly after a container or VM restart and no internal-only service is publicly exposed.
+**Exit criterion:** The bot runs continuously without publicly exposing internal service ports.
 
-### Phase 3 — Persistent data and authorization
+### Phase 3 — Data, permissions, and recovery
 
-**Goal:** Implement the established data classes and staff boundary before handling sensitive records.
-
-Deliverables:
-
-- Database container and persistent volume.
-- Server configuration and approved-reference storage.
-- Summary/precedent storage and access policy.
-- Arbiter Staff authorization checks.
-- Protected staff-note CRUD and append-only audit metadata.
-- Tests proving staff notes cannot enter ordinary public summarization prompts.
-
-**Exit criterion:** Ordinary members cannot access sensitive records; staff notes are excluded from normal model context by design and test.
-
-### Phase 4 — AI gateway pilot
-
-**Goal:** Validate a controlled internal model route.
+**Goal:** Implement durable state and sensitive boundaries.
 
 Deliverables:
 
-- FreeLLMAPI running privately alongside Arbiter.
-- One primary and one fallback personally controlled provider key.
-- One default model chosen from a focused evaluation set of representative, non-sensitive debate material.
-- Tests for normal response, timeout, rate/quota exhaustion, provider failure, and fallback.
-- Per-summary provider/model metadata for troubleshooting.
+- PostgreSQL/Drizzle schema, migration tooling, and `arbiter-migrate` job.
+- Persistent volume and database role policy.
+- Channel-policy/configuration storage.
+- Summary/precedent storage with source visibility classification.
+- Arbiter Staff role checks, staff-note CRUD, and append-only audit events.
+- PostgreSQL-backed job state.
+- Scheduled encrypted OCI backup and tested restore procedure.
+- Tests proving staff notes cannot enter ordinary prompts.
 
-**Exit criterion:** The bot can make a repeatable internal request through the gateway, failure is diagnosable, and credentials are absent from Git/history/logs.
+**Exit criterion:** Data classes are separated, recovery is tested, and unauthorized access/prompt inclusion is rejected by design and test.
 
-### Phase 5 — Neutral summarizer
+### Phase 4 — Gateway and model pilot
 
-**Goal:** Deliver the first user-facing debate utility in an approved test channel.
-
-Deliverables:
-
-- `/arbiter summarize` command.
-- Bounded message collection, cleanup, validation, and active-job lock.
-- Fixed neutral prompt and structured output validation.
-- Context retrieval limited to approved public/server sources.
-- Rate-limit enforcement and Discord-safe error responses.
-- Manual evaluation against representative non-sensitive discussions.
-
-**Exit criterion:** Summaries are concise, accurate to the supplied material, non-advocacy, understandable in Discord, and safe under normal failure conditions.
-
-### Phase 6 — Public rollout and governance
-
-**Goal:** Enable the summarizer for all members within guarded limits.
+**Goal:** Validate the chosen client implementation and a small FreeLLMAPI route.
 
 Deliverables:
 
-- Public command enablement in approved server discussion spaces.
-- Per-user/channel/server budgets and staff controls.
-- Operational monitoring of error, quota, latency, and fallback patterns.
-- Concise server-facing disclosure of what Arbiter analyzes/stores and who can access staff-only records.
-- Feedback and incident handling process.
+- FreeLLMAPI privately deployed beside Arbiter.
+- Chosen OpenAI-compatible client adapter.
+- One primary and one fallback personally controlled provider route.
+- One default model selected using representative, non-sensitive evaluation material.
+- Timeout, quota, malformed-output, provider-failure, and fallback tests.
+- Provider/model metadata linked to generated results without storing secrets.
 
-**Exit criterion:** The tool meets its reliability and quality expectations under real use and can be paused/rolled back safely.
+**Exit criterion:** A repeatable internal chat/summary request works, errors are classified, and no credentials are in Git/history/logs.
+
+### Phase 5 — Chatbot and summarizer pilot
+
+**Goal:** Deliver interactive chat plus the first specialized debate utility in approved test spaces.
+
+Deliverables:
+
+- Mention/reply chatbot workflow with final context-window policy.
+- `/arbiter summarize` job workflow.
+- Bounded message collection/cleanup.
+- Fixed neutral summary prompt and Zod structured-output validation.
+- Approved-context retrieval only.
+- Public protection enforcement and Discord-safe response/defer handling.
+- Manual evaluation with representative non-sensitive discussions.
+
+**Exit criterion:** Responses and summaries are useful, neutral, accurate to input, cost-bounded, and safe under ordinary failure conditions.
+
+### Phase 6 — Guarded public rollout
+
+**Goal:** Enable chosen public functionality for members in approved server spaces.
+
+Deliverables:
+
+- Public mention/reply and command enablement according to channel policy.
+- Final quota/cooldown/budget values.
+- Arbiter Staff operational controls.
+- Monitoring for errors, latency, quota usage, model fallback, and misuse.
+- Concise server-facing privacy/retention notice.
+- Incident, pause, and rollback procedure.
+
+**Exit criterion:** Arbiter is reliable enough for real use and can be paused/recovered safely.
 
 ### Phase 7 — Deliberate expansion
 
-After the summarizer is stable, add one capability at a time, in this tentative order:
+Consider one capability at a time only after stable v1 use:
 
-1. Debate precedent and rule lookup.
+1. Rule and precedent lookup.
 2. Argument mapping and clarification.
-3. Socratic question generator.
-4. Steelman-both-sides tool.
-5. Staff-only debate-case and moderation-support utilities.
-6. Read-only external research tools or MCP integrations.
+3. Socratic question generation.
+4. Steelman-both-sides assistance.
+5. Staff-only debate-case/moderation-support utilities.
+6. Read-only external research/public API/MCP tools.
 
-Each addition requires a defined use case, privacy review, authorization policy, operational limits, and acceptance criteria.
+Every new capability needs a defined user benefit, privacy/context review, permissions, limits, tests, and acceptance criteria.
 
-## 10. Explicitly deferred
+## 9. Deferred work
 
 These are not v1 requirements:
 
+- Passive autonomous participation in ordinary chat.
 - Public multi-model selection.
-- Multiple gateways running concurrently in production.
+- Multiple production gateways.
+- Redis/BullMQ or multi-worker queue infrastructure.
 - Autonomous agent behavior.
-- Publicly prompted MCP-tool execution.
-- Unrestricted web scraping or live-web research.
-- Automatic use of staff notes in model prompts.
-- AI-based punishments or autonomous moderation/staff actions.
-- A vector/semantic database before relational retrieval proves inadequate.
-- Feature parity with legacy Arbiter.
-- A public open-source release before readiness review.
+- Publicly prompted MCP execution.
+- Unrestricted scraping or live-web research.
+- Automatic staff-note inclusion in any model prompts.
+- AI punishments or autonomous moderation/staff actions.
+- Vector/semantic database before relational retrieval proves inadequate.
+- Legacy feature parity.
+- Public open-source release before readiness review.
 
-## 11. Repository and security controls
+## 10. Repository and security baseline
 
-- Keep `master` protected with an active ruleset requiring pull requests, resolved conversations, linear history, and blocking deletions/force pushes.
+- Protect `master` with an active ruleset requiring PRs, resolved conversations, linear history, and blocked deletions/force pushes.
 - Use zero required approvals while there is one maintainer; require CI checks after the test workflow exists.
-- Enable Issues and Projects; keep Wikis and Discussions off initially.
-- Permit only GitHub-owned and verified-creator Actions; default workflow token permission is read-only contents.
-- Enable dependency graph and automatic dependency submission.
-- Enable Dependabot alerts/security updates, secret scanning, push protection, and private vulnerability reporting where available.
-- Keep webhooks, deploy keys, GitHub Pages, Codespaces, environments, and autonomous repository-level Copilot workflows unconfigured until they have approved use cases.
-- When deployment automation begins, create `development` and `production` environments, scope secrets to them, and restrict production deployments to `master` with manual approval.
+- Enable Issues and Projects; keep Wiki and Discussions off initially.
+- Allow only GitHub-owned and verified-creator Actions; default workflow-token permission is read-only contents.
+- Enable dependency graph, automatic dependency submission, Dependabot alerts/security updates, secret scanning, push protection, and private vulnerability reporting where available.
+- Keep webhooks, deploy keys, Pages, Codespaces, environments, and autonomous repository-level Copilot workflows unconfigured until there is a reviewed need.
+- Create `development` and `production` environments only when deployment automation starts. Scope secrets to environments and require manual approval for production deployment from `master`.
 
-## 12. Decision and reference practice
+## 11. Open v1 decisions
 
-Update this roadmap when an established commitment, phase gate, or operational constraint changes. Use `docs/DECISIONS.md` for individual architecture decision records: context, considered options, decision, rationale, status, date, consequences, and conditions for revisit.
+| Decision | Why it remains open | Resolve by |
+| --- | --- | --- |
+| Message-history retention/context-window policy | Determines privacy, storage volume, contextual usefulness, and AI cost. | Phase 0 |
+| Default chatbot role | Determines whether ordinary responses prioritize debate analysis, general assistance, or a controlled blend. | Phase 0 |
+| OpenAI-compatible client package | Official OpenAI SDK adapter, direct `fetch`, Vercel AI SDK, or LangChain must be selected deliberately. | Phase 0/4 |
+| Primary/fallback provider and model | Requires a focused quality, cost, quota, privacy, and reliability evaluation. | Phase 0/4 |
+| Exact numerical limits | Cooldown, input cap, daily server budget, retry count, and stuck-job timeout need calibration. | Phase 0/5 |
+| Initial database schema detail | Tables, indexes, constraints, and visibility model must follow the context/retention policy. | Phase 3 |
+| OCI provisioning details | VM shape, OS, firewall/SSH hardening, DNS/admin access, and backup credentials depend on actual account capacity. | Phase 2 |
+| Public data/privacy notice | Exact server-facing disclosure must match final retention and channel policy. | Before Phase 6 |
 
-### Primary references
+## 12. Primary references
 
-- [Discord Developer Documentation](https://docs.discord.com/developers/intro) — Discord interactions, permissions, API constraints, and policy.
-- [Discord rate limits](https://docs.discord.com/developers/topics/rate-limits) and [Gateway documentation](https://docs.discord.com/developers/events/gateway) — transport limits; Arbiter's AI-workload limits must be more conservative and cost-aware.
-- [Oracle Cloud Always Free resources](https://docs.oracle.com/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm) and [service limits](https://docs.oracle.com/iaas/Content/General/service-limits/default.htm) — initial infrastructure assumptions and limits.
-- [Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/) and [Compose production guidance](https://docs.docker.com/compose/how-tos/production/) — deployment secret and production practices.
-- [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) — initial internal gateway candidate.
-- [OmniRoute](https://github.com/diegosouzapw/OmniRoute) — future gateway evaluation candidate.
-- `GodFossil/arbiter-legacy` — historical product reference only.
+- [Discord Developer Documentation](https://docs.discord.com/developers/intro)
+- [Discord Gateway intents and privileged-intent guidance](https://docs.discord.com/developers/gateway/you-might-not-need-a-privileged-intent)
+- [Discord interactions and commands](https://docs.discord.com/developers/interactions/overview)
+- [Discord API rate limits](https://docs.discord.com/developers/topics/rate-limits)
+- [Discord Gateway](https://docs.discord.com/developers/events/gateway)
+- [Oracle Cloud Always Free resources](https://docs.oracle.com/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+- [Oracle Cloud service limits](https://docs.oracle.com/iaas/Content/General/service-limits/default.htm)
+- [Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/)
+- [Docker Compose production guidance](https://docs.docker.com/compose/how-tos/production/)
+- [PostgreSQL documentation](https://www.postgresql.org/docs/)
+- [PostgreSQL `pg_dump`](https://www.postgresql.org/docs/current/app-pgdump.html)
+- [Drizzle ORM migrations](https://orm.drizzle.team/docs/migrations)
+- [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)
+- [OmniRoute](https://github.com/diegosouzapw/OmniRoute)
 
-### Candidate catalogs and future references
+### Candidate resources for later decisions
 
 - Public API catalogs: `public-apis/public-apis`, `public-api-lists/public-api-lists`, and `JuanPabloDiaz/freeForGeeks`.
 - Memory/agent references: `akitaonrails/ai-memory`, Upstash Context7, LangChain, `gfernandf/agent-skills`, and `volcengine/OpenViking`.
 - Future read-only tool candidates: Firecrawl MCP Server, Bright Data MCP Server, Hugging Face MCP Server, Tavily, and ScrapeGraphAI.
 
-These are inputs for later, specific decisions—not default runtime dependencies.
+These resources are inputs for later specific decisions, not default runtime dependencies.
