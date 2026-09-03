@@ -1,7 +1,7 @@
 # Arbiter Project Roadmap
 
 > **Status:** Canonical v1 roadmap  
-> **Last updated:** 2026-09-02  
+> **Last updated:** 2026-09-03 
 > **Repository:** `GodFossil/arbiter`  
 > **Default branch:** `master`
 
@@ -71,6 +71,32 @@ The legacy Arbiter repository and prior Render deployment are historical referen
 | Gateway exposure | Bot reaches gateway only through the private Docker network; gateway API/dashboard is not public. | Established |
 | Initial hosting | Oracle Cloud Always Free VM, subject to actual tenancy capacity/limits, using Docker Compose. | Established |
 | External tools | Broad web research, MCP, public APIs, and write-capable tools are deferred until core chat/summarization is stable. | Deferred |
+
+## 3.1 Current implementation status
+
+**Status as of 2026-09-03:** The initial Discord connectivity and interaction vertical slice is complete in the private development guild. This is partial progress within Phase 1, not completion of Phase 1 or authorization for public deployment.
+
+Completed:
+
+- Created the Arbiter Discord application and bot identity.
+- Configured and installed Arbiter into the separate private development guild.
+- Configured development installation with the `bot` and `applications.commands` scopes.
+- Kept privileged gateway intents disabled during the bootstrap slice; Message Content intent remains a later requirement before implementing approved-history chatbot or summarization behavior.
+- Established a TypeScript/Node.js/ES Modules project using plain `discord.js`, pnpm, and `tsx` local development.
+- Added local environment-based configuration; credentials remain in Git-ignored `.env`, with a safe `.env.example` template.
+- Implemented a minimal Discord gateway client using only the `Guilds` intent.
+- Implemented separate development-guild slash-command registration.
+- Implemented, registered, routed, and manually verified the harmless `/ping` diagnostic command.
+- Verified a successful `/ping` response with measured gateway latency of 44 ms.
+- Migrated the project to pnpm with a committed `pnpm-lock.yaml`, `pnpm-workspace.yaml`, and pinned `packageManager` value.
+- Corrected the application configuration contract to use `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID`, and `DISCORD_GUILD_ID`.
+- Committed and pushed the working bootstrap and package/configuration-alignment changes.
+
+Not yet complete:
+
+- Compiled `dist/` production scripts, Vitest, Biome, Zod, CI, configuration-schema validation, role/channel-policy abstractions, and the provider-neutral LLM adapter remain Phase 1 work.
+- No database, AI gateway, message-history collection, summarization, staff-note, public chatbot, or production deployment behavior has been implemented.
+- No public functionality is enabled in The Debate Server.
 
 ## 4. Data and authorization model
 
@@ -364,6 +390,8 @@ Deliverables:
 **Exit criterion:** We can state what Arbiter responds to, which history it can use/retain, what it never uses, and what an ordinary member sees when it succeeds, refuses, or fails.
 
 ### Phase 1 — TypeScript bot foundation
+
+**Status:** In progress. The pnpm project setup, Discord gateway bootstrap, development-guild command registration, and `/ping` diagnostic slice are complete. The remaining Phase 1 deliverables and exit criterion still apply.
 
 **Goal:** Build the local application skeleton.
 
