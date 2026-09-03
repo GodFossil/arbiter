@@ -67,7 +67,7 @@ The legacy Arbiter repository and prior Render deployment are historical referen
 | Initial gateway | FreeLLMAPI as an internal self-hosted gateway. | Established |
 | Model experience | One selected general-purpose default model; no public model picker. | Established |
 | Provider routing | One personally controlled primary provider/key, one personally controlled fallback, optional disabled managed emergency route. | Established |
-| Gateway client package | Unresolved: select after chatbot context policy is decided. | Open |
+| Gateway client package | Official OpenAI JavaScript/TypeScript SDK behind a minimal Arbiter-owned adapter; application services do not depend directly on the SDK. SDK-level blind retries are disabled by default. | Established |
 | Gateway exposure | Bot reaches gateway only through the private Docker network; gateway API/dashboard is not public. | Established |
 | Initial hosting | Oracle Cloud Always Free VM, subject to actual tenancy capacity/limits, using Docker Compose. | Established |
 | External tools | Broad web research, MCP, public APIs, and write-capable tools are deferred until core chat/summarization is stable. | Deferred |
@@ -126,7 +126,9 @@ Message Content intent enables the technical ability to receive ordinary message
 
 Arbiter uses a structured-memory-first model. Long-term memory consists primarily of summaries, precedents, approved references, server configuration, and automatic member dossiers. Raw messages may be retained only in bounded, channel-policy-authorized windows for live context and eligible summary processing, rather than as the default durable-memory layer.
 
-The exact raw-message retention duration, context-window limits, dossier extraction triggers, dossier retrieval audience, and profile-operation controls remain open decisions.
+Eligible raw-message records are retained for 30 days from their original Discord timestamp, then automatically deleted. Invoked chatbot context is capped at 30 eligible messages and 40,000 characters. Summary source material is capped at 250 eligible messages and 150,000 characters.
+
+Context selection preserves author attribution and chronological ordering, excludes disallowed, bot/system, and irrelevant material, and must disclose bounded coverage when a summary cannot cover all eligible source material. Dossier extraction triggers, dossier retrieval audience, and profile-operation controls remain open decisions.
 
 ### 4.5 Secrets
 
@@ -335,6 +337,14 @@ The result is a record, not a verdict. Arbiter may describe a thread claim as un
 
 Exact numerical limits are an open decision to be calibrated before the public rollout.
 
+### 7.5 Model-route evaluation policy
+
+Select the primary and fallback FreeLLMAPI routes through a strict, repeatable evaluation process before public AI rollout. The corpus contains 50 fixtures: 35 synthetic fixtures and 15 authorized, non-sensitive Debate Server excerpts stored as curated private Git fixtures with minimal provenance metadata.
+
+Evaluation uses hybrid scoring: automated gates and measurements plus an Arbiter Staff review rubric. Route selection weights analytical quality and behavior at 80% and operational performance at 20%. Candidates must pass mandatory automated gates, meet critical human-review floors, and then rank by weighted score.
+
+A primary route requires at least 85/100 overall, at least 4.0/5 for grounded reasoning, instruction fidelity, and uncertainty/anti-fabrication behavior, and at least 3.5/5 for legacy Arbiter persona fidelity. A fallback requires at least 78/100 and the same critical floors; use an independent provider route where practical. If no candidate qualifies, public AI rollout does not proceed.
+
 ## 8. Implementation sequence
 
 ### Phase 0 — Product, privacy, and context contract
@@ -365,7 +375,7 @@ Deliverables:
 - Biome, Vitest, Zod, and initial CI workflow.
 - Configuration loader/startup validation.
 - Basic role/channel policy abstractions and a harmless diagnostic command.
-- Provider-neutral LLM client interface, without a chosen client-package implementation.
+- Arbiter-owned LLM adapter using the official OpenAI JavaScript/TypeScript SDK, with provider-specific details confined to infrastructure.
 
 **Exit criterion:** The bot starts safely in a private test server/channel and fails safely with invalid configuration.
 
@@ -407,7 +417,7 @@ Deliverables:
 Deliverables:
 
 - FreeLLMAPI privately deployed beside Arbiter.
-- Chosen OpenAI-compatible client adapter.
+- Official OpenAI JavaScript/TypeScript SDK adapter configured for FreeLLMAPI's internal endpoint, explicit timeout, and no SDK-level blind retries.
 - One primary and one fallback personally controlled provider route.
 - One default model selected using representative, non-sensitive evaluation material.
 - Timeout, quota, malformed-output, provider-failure, and fallback tests.
@@ -421,7 +431,7 @@ Deliverables:
 
 Deliverables:
 
-- Mention/reply chatbot workflow with final context-window policy.
+- Mention/reply chatbot workflow using the established cap of 30 eligible messages and 40,000 characters.
 - `/arbiter summarize` job workflow.
 - Bounded message collection/cleanup.
 - Fixed neutral summary prompt and Zod structured-output validation.
@@ -490,10 +500,8 @@ These are not v1 requirements:
 
 | Decision | Why it remains open | Resolve by |
 | --- | --- | --- |
-| Exact raw-message retention/context-window limits | Structured-memory-first is established, but exact duration and input/retrieval limits determine storage volume, contextual usefulness, and AI cost. | Phase 0 |
 | Dossier operation policy | Extraction triggers, retrieval audience, source/provenance requirements, retention, and staff/member controls need explicit definition. | Phase 0/3 |
-| OpenAI-compatible client package | Official OpenAI SDK adapter, direct `fetch`, Vercel AI SDK, or LangChain must be selected deliberately. | Phase 0/4 |
-| Primary/fallback provider and model | Requires a focused quality, cost, quota, privacy, and reliability evaluation. | Phase 0/4 |
+| Primary/fallback provider and model | Named FreeLLMAPI routes must be evaluated privately against the established mixed corpus before selection. | Phase 4 |
 | Exact numerical limits | Cooldown, input cap, daily server budget, retry count, and stuck-job timeout need calibration. | Phase 0/5 |
 | Initial database schema detail | Tables, indexes, constraints, and visibility model must follow the context/retention policy. | Phase 3 |
 | OCI provisioning details | VM shape, OS, firewall/SSH hardening, DNS/admin access, and backup credentials depend on actual account capacity. | Phase 2 |
