@@ -4,6 +4,7 @@
   "description": "The Debate Server's Arbiter utility bot.",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
@@ -14,12 +15,7 @@
     "type": "git",
     "url": "git+https://github.com/GodFossil/arbiter.git"
   },
-  "keywords": [
-    "discord",
-    "discord-bot",
-    "arbiter",
-    "debate-server"
-  ],
+  "keywords": ["discord", "discord-bot", "arbiter", "debate-server"],
   "author": "GodFossil",
   "license": "ISC",
   "bugs": {

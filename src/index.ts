@@ -8,10 +8,10 @@ import {
 } from 'discord.js';
 import { pingCommand } from './commands/ping.js';
 
-const token = process.env.DISCORD_BOT_TOKEN;
+const token = process.env.DISCORD_TOKEN;
 
 if (!token) {
-  throw new Error('DISCORD_BOT_TOKEN is required.');
+  throw new Error('DISCORD_TOKEN is required.');
 }
 
 const commands = new Map([
@@ -40,7 +40,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     await command.execute(interaction);
-  
   } catch (error) {
     console.error(`Failed to execute /${interaction.commandName}:`, error);
 
