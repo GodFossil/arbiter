@@ -1,0 +1,38 @@
+{
+  "name": "arbiter",
+  "version": "0.1.0",
+  "description": "The Debate Server's Arbiter utility bot.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "deploy:dev": "tsx src/deploy-commands.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GodFossil/arbiter.git"
+  },
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "arbiter",
+    "debate-server"
+  ],
+  "author": "GodFossil",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/GodFossil/arbiter/issues"
+  },
+  "homepage": "https://github.com/GodFossil/arbiter#readme",
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
