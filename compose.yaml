@@ -1,0 +1,12 @@
+services:
+  arbiter-bot:
+    build:
+      context: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
