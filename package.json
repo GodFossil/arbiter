@@ -17,7 +17,12 @@
     "type": "git",
     "url": "git+https://github.com/GodFossil/arbiter.git"
   },
-  "keywords": ["discord", "discord-bot", "arbiter", "debate-server"],
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "arbiter",
+    "debate-server"
+  ],
   "author": "GodFossil",
   "license": "ISC",
   "bugs": {
@@ -26,7 +31,8 @@
   "homepage": "https://github.com/GodFossil/arbiter#readme",
   "dependencies": {
     "discord.js": "^14.27.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "openai": "^7.23.0"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
