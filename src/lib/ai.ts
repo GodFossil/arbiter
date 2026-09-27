@@ -2,13 +2,19 @@ import OpenAI from 'openai';
 
 const baseURL = process.env.AI_BASE_URL;
 const apiKey = process.env.AI_API_KEY;
-const model = process.env.AI_MODEL ?? '';
+const primaryModel = process.env.AI_MODEL ?? '';
+const fallbackModel = process.env.AI_FALLBACK_MODEL ?? '';
 
 if (!baseURL) throw new Error('AI_BASE_URL is required.');
 if (!apiKey) throw new Error('AI_API_KEY is required.');
-if (!model) throw new Error('AI_MODEL is required.');
+if (!primaryModel) throw new Error('AI_MODEL is required.');
 
-const openai = new OpenAI({ baseURL, apiKey });
+const openai = new OpenAI({
+  baseURL,
+  apiKey,
+  timeout: 30_000,
+  maxRetries: 0,
+});
 
 /**
  * The canonical Arbiter persona, preserved exactly from the legacy bot.
@@ -40,16 +46,7 @@ export interface ContextMessage {
   content: string;
 }
 
-/**
- * Send a conversation to the AI and return Arbiter's reply.
- *
- * @param context  Recent channel messages, oldest first.
- * @param prompt   The current message Arbiter is responding to.
- */
-export async function reply(
-  context: ContextMessage[],
-  prompt: string,
-): Promise<string> {
+async function complete(model: string, context: ContextMessage[], prompt: string): Promise<string> {
   const completion = await openai.chat.completions.create({
     model,
     messages: [
@@ -60,10 +57,26 @@ export async function reply(
   });
 
   const content = completion.choices[0]?.message?.content;
-
-  if (!content) {
-    throw new Error('AI returned an empty response.');
-  }
-
+  if (!content) throw new Error('AI returned an empty response.');
   return content.trim();
+}
+
+/**
+ * Send a conversation to the AI and return Arbiter's reply.
+ * Attempts the primary model first; falls back to AI_FALLBACK_MODEL if set.
+ *
+ * @param context  Recent channel messages, oldest first.
+ * @param prompt   The current message Arbiter is responding to.
+ */
+export async function reply(
+  context: ContextMessage[],
+  prompt: string,
+): Promise<string> {
+  try {
+    return await complete(primaryModel, context, prompt);
+  } catch (primaryError) {
+    if (!fallbackModel) throw primaryError;
+    console.warn('[ai] Primary model failed, trying fallback:', primaryError);
+    return await complete(fallbackModel, context, prompt);
+  }
 }
