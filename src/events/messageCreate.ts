@@ -63,8 +63,14 @@ async function sendReply(message: Message, text: string): Promise<void> {
   }
 
   await message.reply(chunks[0]!);
+
+  const channel = message.channel;
+  if (!channel.isSendable()) {
+    throw new Error('Cannot send additional reply chunks to this channel.');
+  }
+
   for (const chunk of chunks.slice(1)) {
-    await message.channel.send(chunk);
+    await channel.send(chunk);
   }
 }
 

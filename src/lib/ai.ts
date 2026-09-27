@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 
 const baseURL = process.env.AI_BASE_URL;
 const apiKey = process.env.AI_API_KEY;
-const model = process.env.AI_MODEL;
+const model = process.env.AI_MODEL ?? '';
 
 if (!baseURL) throw new Error('AI_BASE_URL is required.');
 if (!apiKey) throw new Error('AI_API_KEY is required.');
