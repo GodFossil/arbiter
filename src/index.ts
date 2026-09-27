@@ -7,6 +7,7 @@ import {
   type InteractionReplyOptions,
 } from 'discord.js';
 import { pingCommand } from './commands/ping.js';
+import { registerMessageCreate } from './events/messageCreate.js';
 
 const token = process.env.DISCORD_TOKEN;
 
@@ -19,7 +20,11 @@ const commands = new Map([
 ]);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 client.once(Events.ClientReady, (readyClient) => {
@@ -59,5 +64,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.Error, (error) => {
   console.error('Discord client error:', error);
 });
+
+registerMessageCreate(client);
 
 await client.login(token);
