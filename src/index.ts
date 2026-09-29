@@ -34,6 +34,12 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 createServer((request, response) => {
+  if (request.method === 'GET' && request.url === '/') {
+    response.writeHead(302, { location: 'https://stats.uptimerobot.com/RVdfyvKTe4' });
+    response.end();
+    return;
+  }
+
   if (request.method === 'GET' && request.url === '/health') {
     response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
     response.end('ok');
