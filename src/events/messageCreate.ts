@@ -3,15 +3,20 @@ import { reply, type ContextMessage } from '../lib/ai.js';
 
 const CONTEXT_LIMIT = 10;
 const DISCORD_MAX_LENGTH = 2000;
+const allowedGuildId = process.env.DISCORD_GUILD_ID;
+const allowedChannelId = process.env.DISCORD_ALLOWED_CHANNEL_ID;
 
-/**
- * Determines whether Arbiter should respond to this message.
- * Arbiter responds when directly mentioned or when a user replies
- * to one of Arbiter's own messages.
- */
+if (!allowedGuildId) throw new Error('DISCORD_GUILD_ID is required.');
+if (!allowedChannelId) throw new Error('DISCORD_ALLOWED_CHANNEL_ID is required.');
+
+function isAllowed(message: Message): boolean {
+  return message.guildId === allowedGuildId && message.channelId === allowedChannelId;
+}
+
 function shouldRespond(message: Message, clientId: string): boolean {
   if (message.author.bot) return false;
   if (!message.inGuild()) return false;
+  if (!isAllowed(message)) return false;
 
   const mentioned = message.mentions.users.has(clientId);
   const replyToArbiter =
@@ -21,10 +26,6 @@ function shouldRespond(message: Message, clientId: string): boolean {
   return mentioned || replyToArbiter;
 }
 
-/**
- * Fetches recent channel history and shapes it into context messages
- * for the AI adapter, oldest first, excluding the triggering message.
- */
 async function buildContext(
   message: Message,
   clientId: string,
@@ -44,10 +45,6 @@ async function buildContext(
     .filter((msg) => msg.content.length > 0);
 }
 
-/**
- * Sends a reply, splitting across multiple messages if the response
- * exceeds Discord's 2000-character limit.
- */
 async function sendReply(message: Message, text: string): Promise<void> {
   if (text.length <= DISCORD_MAX_LENGTH) {
     await message.reply(text);
@@ -63,31 +60,19 @@ async function sendReply(message: Message, text: string): Promise<void> {
   }
 
   await message.reply(chunks[0]!);
-
-  const channel = message.channel;
-  if (!channel.isSendable()) {
-    throw new Error('Cannot send additional reply chunks to this channel.');
-  }
-
   for (const chunk of chunks.slice(1)) {
-    await channel.send(chunk);
+    await message.channel.send(chunk);
   }
 }
 
-/**
- * Registers the messageCreate event handler on the Discord client.
- */
 export function registerMessageCreate(client: Client): void {
   client.on(Events.MessageCreate, async (message) => {
     const clientId = client.user?.id;
-    if (!clientId) return;
-
-    if (!shouldRespond(message, clientId)) return;
+    if (!clientId || !shouldRespond(message, clientId)) return;
 
     try {
       const context = await buildContext(message, clientId);
-      const prompt = message.content;
-      const response = await reply(context, prompt);
+      const response = await reply(context, message.content);
       await sendReply(message, response);
     } catch (error) {
       console.error('Failed to handle message:', error);
