@@ -9,27 +9,17 @@ const allowedChannelId = process.env.DISCORD_ALLOWED_CHANNEL_ID;
 if (!allowedGuildId) throw new Error('DISCORD_GUILD_ID is required.');
 if (!allowedChannelId) throw new Error('DISCORD_ALLOWED_CHANNEL_ID is required.');
 
-function isAllowed(message: Message): boolean {
-  return message.guildId === allowedGuildId && message.channelId === allowedChannelId;
-}
-
 function shouldRespond(message: Message, clientId: string): boolean {
-  if (message.author.bot) return false;
-  if (!message.inGuild()) return false;
-  if (!isAllowed(message)) return false;
+  if (message.author.bot || !message.inGuild()) return false;
+  if (message.guildId !== allowedGuildId || message.channelId !== allowedChannelId) return false;
 
-  const mentioned = message.mentions.users.has(clientId);
-  const replyToArbiter =
+  return message.mentions.users.has(clientId) || (
     message.reference?.messageId !== undefined &&
-    message.mentions.repliedUser?.id === clientId;
-
-  return mentioned || replyToArbiter;
+    message.mentions.repliedUser?.id === clientId
+  );
 }
 
-async function buildContext(
-  message: Message,
-  clientId: string,
-): Promise<ContextMessage[]> {
+async function buildContext(message: Message, clientId: string): Promise<ContextMessage[]> {
   const fetched = await message.channel.messages.fetch({
     limit: CONTEXT_LIMIT,
     before: message.id,
@@ -60,8 +50,14 @@ async function sendReply(message: Message, text: string): Promise<void> {
   }
 
   await message.reply(chunks[0]!);
+
+  const channel = message.channel;
+  if (!channel.isSendable()) {
+    throw new Error('Cannot send additional reply chunks to this channel.');
+  }
+
   for (const chunk of chunks.slice(1)) {
-    await message.channel.send(chunk);
+    await channel.send(chunk);
   }
 }
 

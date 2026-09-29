@@ -4,7 +4,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
-  type ChatInputCommandInteraction,
+  MessageFlags,
   type InteractionReplyOptions,
 } from 'discord.js';
 import { pingCommand } from './commands/ping.js';
@@ -28,7 +28,10 @@ const client = new Client({
   ],
 });
 
-const port = Number(process.env.PORT) || 3000;
+const port = Number(process.env.PORT ?? 3000);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error('PORT must be a valid TCP port.');
+}
 
 createServer((request, response) => {
   if (request.method === 'GET' && request.url === '/health') {
@@ -44,29 +47,32 @@ createServer((request, response) => {
 });
 
 client.once(Events.ClientReady, (readyClient) => {
-  console.info(`Ready! Logged in as ${readyClient.user.tag}`);
+  console.info(`Arbiter is online as ${readyClient.user.tag}.`);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const command = commands.get(interaction.commandName);
-  if (!command) return;
+  if (!command) {
+    console.error(`No handler exists for /${interaction.commandName}.`);
+    return;
+  }
 
   try {
-    await command.execute(interaction as ChatInputCommandInteraction);
+    await command.execute(interaction);
   } catch (error) {
     console.error(`Failed to execute /${interaction.commandName}:`, error);
 
-    const reply: InteractionReplyOptions = {
-      content: 'There was an error while executing this command.',
-      ephemeral: true,
+    const errorMessage: InteractionReplyOptions = {
+      content: 'Arbiter encountered an error while running that command.',
+      flags: MessageFlags.Ephemeral,
     };
 
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(reply);
+      await interaction.followUp(errorMessage);
     } else {
-      await interaction.reply(reply);
+      await interaction.reply(errorMessage);
     }
   }
 });
