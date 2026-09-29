@@ -1,7 +1,7 @@
 # Arbiter Project Roadmap
 
 > **Status:** Canonical v1 roadmap
-> **Last updated:** 2026-09-26
+> **Last updated:** 2026-09-29
 > **Repository:** `GodFossil/arbiter`
 > **Default branch:** `master`
 
@@ -98,8 +98,12 @@ set are not requirements for this clean-slate implementation.
 | Member dossiers | Not part of the initial pilot or v1 core path. Any future dossier capability requires a separate approved use case and policy. | Deferred |
 | Sensitive functions | Dedicated Discord role: `Arbiter Staff`. | Established |
 | Staff notes | Staff-only; never automatically included in ordinary summary or future chatbot prompts. | Established |
-| LLM client | Official OpenAI JavaScript/TypeScript SDK behind a minimal Arbiter-owned adapter; application services do not depend directly on the SDK. SDK-level blind retries are disabled. Adapter currently uses placeholder environment variables (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`). | Established |
-| Initial gateway | FreeLLMAPI as the internal self-hosted gateway candidate. | Established |
+| LLM client | Official OpenAI JavaScript/TypeScript SDK behind a minimal Arbiter-owned adapter; application services do not depend directly on the SDK. SDK-level blind retries are disabled. Adapter currently uses placeholder environment variables (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, optional `AI_FALLBACK_MODEL`) with explicit `timeout: 30_000` and `maxRetries: 0`. | Established |
+| Initial gateway | FreeLLMAPI as the internal self-hosted gateway. | Established |
+| FreeLLMAPI hosting | Render free Web Service in a separate Render account. | Established |
+| Arbiter hosting plan | Render free Web Service in its own separate Render account, kept awake by scheduled UptimeRobot HTTP checks during the pilot. | Established |
+| Service-to-service connection | Arbiter calls FreeLLMAPI over public HTTPS using the gateway's Render URL and a FreeLLMAPI-issued unified API key. The earlier private Docker-network assumption is superseded for the free Render deployment. | Established |
+| FreeLLMAPI persistence | FreeLLMAPI's encrypted SQLite database is backed up through an authenticated Cloudflare Worker to a private Cloudflare R2 bucket and restored automatically on startup. Restart/restore testing passed with provider configuration and unified key preserved across redeploy. | Established |
 | Model evaluation | One selected general-purpose default model; no public model picker. Primary and fallback routes evaluated against a 50-fixture corpus (35 synthetic + 15 authorized Debate Server excerpts). Analytical quality weighted 80%, operational performance 20%. Primary route must score ≥ 85/100 overall and ≥ 4.0/5 on reasoning, instruction fidelity, and anti-fabrication floors. | Established |
 | External tools | Broad web research, MCP, public APIs, and write-capable tools are deferred until the summary pilot is stable. | Deferred |
 
@@ -110,15 +114,12 @@ and testing before they are treated as established.
 
 | Area | Proposed direction | What must happen before it is established |
 | --- | --- | --- |
-| Initial hosting — Arbiter | Render free Web Service in one account, running the compiled Node.js bot. | Successful Render deploy, Discord connectivity, and `/ping` verified in the test guild. |
-| Initial hosting — FreeLLMAPI | Render free Web Service in a **separate** Render account. Separate account avoids the 750-hour shared free-tier pool being split between two services. | Successful deploy, dashboard accessible, API responding on `/v1`. |
-| Service-to-service connection | Arbiter calls FreeLLMAPI over public HTTPS using the gateway's Render `onrender.com` URL plus a FreeLLMAPI-issued API key. This supersedes the earlier private Docker-network plan if adopted. | End-to-end AI response verified; latency and cold-start behavior acceptable. |
-| FreeLLMAPI persistence | FreeLLMAPI's encrypted SQLite database is backed up to an external HTTPS store on a short interval and restored automatically on startup, compensating for Render's ephemeral filesystem. | Backup destination chosen; restart/restore test passes before real provider keys are entered. |
-| OCI hosting plan | **Superseded by the Render pilot proposal** while the pilot is evaluated. The OCI plan remains available as a fallback if the Render pilot fails. | Render pilot must pass all acceptance gates to be considered established. |
+| Arbiter Render uptime reliability | UptimeRobot keep-awake checks are expected to keep the free Arbiter web service responsive enough for pilot use. | Live service remains reliably reachable over time and the Discord bot stays acceptably available in practice. |
+| Named primary/fallback model pair | A specific production model pair will be chosen after private evaluation. | End-to-end AI response verified; private corpus evaluation completed and scored. |
 
 ## 3.2 Current implementation status
 
-**Status as of 2026-09-26.**
+**Status as of 2026-09-29.**
 
 Completed:
 
@@ -134,21 +135,30 @@ Completed:
 - `/ping` diagnostic command implemented, registered, and manually
   verified (44 ms gateway latency).
 - pnpm migration with committed lockfile and pinned `packageManager`.
-- Mention/reply conversation code implemented and committed (not yet
-  end-to-end verified with a live AI provider).
+- Mention/reply conversation code implemented and committed.
 - Official OpenAI JavaScript/TypeScript SDK added as a dependency
-  (`openai`); Arbiter adapter implemented with placeholder env vars.
+  (`openai`); Arbiter adapter implemented with placeholder env vars,
+  explicit timeout, disabled SDK retries, and optional fallback model.
 - `pnpm build` (`tsc`) passes with no errors.
+- FreeLLMAPI deployed on Render in a separate account.
+- FreeLLMAPI persistence configured via authenticated Cloudflare Worker
+  and private Cloudflare R2 bucket.
+- FreeLLMAPI restart/restore test passed; unified key and Groq provider
+  configuration survived redeploy.
+- Arbiter adapter deployment assumption updated: it will call the
+  gateway's public HTTPS `/v1` endpoint rather than a private network
+  address when using Render free services.
 
 Not yet complete:
 
 - Persona exact-match acceptance test (written and passing in Vitest).
 - Vitest, Biome, Zod, CI, and configuration-schema validation.
-- Live AI provider configured and a successful first Discord conversation
-  verified in the private test guild.
-- FreeLLMAPI deployed, persistence verified, and API key created.
-- Arbiter adapter pointed at the real gateway URL.
-- Model route evaluation corpus and primary/fallback selection.
+- Live Arbiter-side environment configuration pointing at the real
+  gateway URL and unified key.
+- Successful first Discord conversation verified end-to-end through the
+  deployed gateway.
+- Named primary and fallback model route selection.
+- Model route evaluation corpus and private scoring run.
 - Any summarization, database, staff-note, passive detection, or
   production deployment behavior.
 - No public functionality is enabled in The Debate Server.
@@ -334,7 +344,7 @@ Arbiter Discord bot
     +--> Arbiter-owned LLM adapter
               |
               v
-          FreeLLMAPI gateway  (Proposed: separate Render account, public HTTPS)
+          FreeLLMAPI gateway  (Established: separate Render account, public HTTPS)
               |
               v
           Free LLM provider routes (primary + fallback)
@@ -373,15 +383,22 @@ audit visibility, and source attribution where appropriate.
 
 ## 7. Gateway and model policy
 
-FreeLLMAPI is the candidate gateway. Arbiter accesses it only through the
+FreeLLMAPI is the selected gateway. Arbiter accesses it only through the
 Arbiter-owned adapter built on the official OpenAI JavaScript/TypeScript
 SDK. Provider-specific details remain outside command and summary workflow.
 
+Current deployment/logistics facts:
+
+- FreeLLMAPI runs in its own Render free account.
+- Arbiter's Render-free deployment path uses the gateway's public HTTPS
+  `/v1` endpoint, not a private Render network address.
+- FreeLLMAPI persistence recovery has been tested successfully using an
+  authenticated Cloudflare Worker and private Cloudflare R2 bucket.
+- The gateway's unified API key and Groq provider configuration survived
+  the restart/restore test.
+
 Before any public AI rollout:
 
-- Deploy FreeLLMAPI (proposed: separate Render account).
-- Verify persistence recovery after a forced restart before entering real
-  provider credentials.
 - Evaluate one primary and one fallback route against the 50-fixture
   corpus.
 - Primary route requires ≥ 85/100 overall, ≥ 4.0/5 on grounded
@@ -415,10 +432,8 @@ Remaining deliverables:
   prompt string to the canonical legacy text).
 - Vitest, Biome, Zod, and a read-only CI workflow committed.
 - Configuration-schema validation with Zod on startup.
-- FreeLLMAPI deployed (proposed: separate Render account) and persistence
-  recovery test passed.
-- Arbiter adapter `AI_BASE_URL`, `AI_API_KEY`, and `AI_MODEL` pointed at
-  the live gateway.
+- Arbiter-side Render environment configured with live `AI_BASE_URL`,
+  `AI_API_KEY`, and `AI_MODEL` values.
 - Successful first end-to-end mention/reply response in the private test
   guild with the real AI provider.
 - Context bounding and channel authorization for conversation requests.
@@ -546,9 +561,8 @@ permissions, limits, tests, acceptance criteria, and an explicit decision.
 
 | Decision | Why it remains open | Resolve by |
 | --- | --- | --- |
-| FreeLLMAPI backup destination | Required before entering real provider keys into the Render gateway service; no store chosen yet. | Before Phase 1 live AI test |
+| Arbiter free-tier uptime reliability | UptimeRobot-assisted keep-awake behavior is the deployment plan, but long-run practical reliability is still unproven. | During Phase 1 pilot hosting |
 | Primary/fallback provider and model | Named routes require private evaluation against the corpus. | Phase 2 |
-| Render vs. OCI hosting | Render pilot is proposed; OCI plan is the standing fallback. Confirmed by passing deployment and connectivity tests. | Phase 1 completion |
 | Public rollout limits | Pilot values require quality, cost, latency, and misuse evidence before production adoption. | Phase 4 |
 | Public data/privacy notice | Must match the final production retention and channel policy. | Before Phase 4 |
 | Durable storage need | Deferred unless a proven feature requires persistent state. | On demonstrated need |
@@ -564,6 +578,8 @@ permissions, limits, tests, acceptance criteria, and an explicit decision.
 - [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)
 - [Render free-tier documentation](https://render.com/docs/free)
 - [Render web services](https://render.com/docs/web-services)
-- [Oracle Cloud Always Free resources](https://docs.oracle.com/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm) (fallback hosting reference)
+- [Cloudflare R2 documentation](https://developers.cloudflare.com/r2/)
+- [Cloudflare Workers documentation](https://developers.cloudflare.com/workers/)
+- [UptimeRobot](https://uptimerobot.com/)
 - [PostgreSQL documentation](https://www.postgresql.org/docs/)
 - [Drizzle ORM migrations](https://orm.drizzle.team/docs/migrations)
